@@ -268,8 +268,15 @@ impl Verifier {
         );
         compiler.diagnostic().note_without_error(&msg);
 
+        println!("qid_map:");
+        for (key, value) in qid_map {
+            println!("{}: {:?}", key, value);
+        }
+
         for (index, cost) in profiler.iter().take(max).enumerate() {
             // Report the quantifier
+            println!("qid: {}", cost.quant);
+
             let bnd_info = qid_map
                 .get(&cost.quant)
                 .expect(format!("Failed to find quantifier {}", cost.quant).as_str());

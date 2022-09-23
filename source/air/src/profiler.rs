@@ -1,7 +1,9 @@
 //! Analyzes prover performance of the SMT solver
 
-use std::io::BufRead;
+use std::io::{BufRead, Read};
+use std::collections::BTreeMap;
 use z3tracer::model::QuantCost;
+use z3tracer::syntax::{Term, QiFrame};
 use z3tracer::{Model, ModelConfig};
 
 pub const PROVER_LOG_FILE: &str = "verus-prover-trace.log";
@@ -27,6 +29,8 @@ impl Profiler {
         );
         let line_count = file.lines().count();
 
+        println!("{}", std::fs::read_to_string(path).expect("Unable to read file"));
+
         // Reset to actually parse the file
         let file = std::io::BufReader::new(
             std::fs::File::open(path).expect("Failed to open prover trace log"),
@@ -50,6 +54,35 @@ impl Profiler {
             .collect::<Vec<_>>();
         user_quant_costs.sort_by_key(|v| v.instantiations * v.cost);
         user_quant_costs.reverse();
+
+        for (qi_key, quant_inst) in model.instantiations() {
+            let quant_id = quant_inst.frame.quantifier();
+            let quant_term = model
+                .term(&quant_id)
+                .expect(format!("failed to find {:?} in the profiler's model", quant_id).as_str());
+
+            if let Term::Quant { name: quant_name, .. } = quant_term {
+                if !quant_name.starts_with(USER_QUANT_PREFIX) {
+                    continue;
+                }
+
+                // model.log_instance(*qi_key).expect("failed to log stuff");
+
+                println!("User QI instance: {:?}, {:?}, {:?}", qi_key, quant_name, quant_inst);
+
+                match &quant_inst.frame {
+                    QiFrame::NewMatch { terms, .. } => {
+                        let venv = BTreeMap::new();
+                        for term_id in terms {
+                            println!("  inst term: {}", model.id_to_sexp(&venv, term_id).expect("failed to unparse term"));
+                        }
+                    },
+                    _ => {
+                        println!("unsupported")
+                    }
+                }
+            }
+        }
 
         Profiler { quantifier_stats: user_quant_costs }
     }

@@ -33,6 +33,7 @@ use air::ast_util::{
     mk_option_command, mk_or, mk_xor, str_apply, str_ident, str_typ, str_var, string_var,
 };
 use air::errors::{error, error_with_label};
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::mem::swap;
 use std::sync::Arc;
@@ -1357,7 +1358,11 @@ fn stm_to_stmts(ctx: &Ctx, state: &mut State, stm: &Stm) -> Result<Vec<Stmt>, Vi
             }
             if ctx.funcs_with_ensure_predicate.contains(&func.x.name) {
                 let f_ens = prefix_ensures(&fun_to_air_ident(&func.x.name));
-                let e_ens = Arc::new(ExprX::Apply(f_ens, Arc::new(ens_args)));
+                let e_ens = Arc::new(ExprX::Apply(f_ens.clone(), Arc::new(ens_args)));
+
+                // ZL TODO: inline ensure clauses here if profile-all is on
+                // and change the qids of any quantified formula
+                println!("ensures added! {:?}: {:?}", f_ens, e_ens);
                 stmts.push(Arc::new(StmtX::Assume(e_ens)));
             }
             vec![Arc::new(StmtX::Block(Arc::new(stmts)))] // wrap in block for readability

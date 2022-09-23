@@ -19,6 +19,7 @@ use std::sync::Arc;
 pub type Trig = Exps;
 pub type Trigs = Arc<Vec<Trig>>;
 
+#[derive(Debug)]
 pub struct BndInfo {
     pub span: Span,
     pub trigs: Trigs,
