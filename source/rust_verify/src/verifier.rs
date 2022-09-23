@@ -275,8 +275,6 @@ impl Verifier {
 
         for (index, cost) in profiler.iter().take(max).enumerate() {
             // Report the quantifier
-            println!("qid: {}", cost.quant);
-
             let bnd_info = qid_map
                 .get(&cost.quant)
                 .expect(format!("Failed to find quantifier {}", cost.quant).as_str());
@@ -302,6 +300,22 @@ impl Verifier {
             let mut multi = MultiSpan::from_spans(spans);
             multi.push_span_label(span, "Triggers selected for this quantifier".to_string());
             compiler.diagnostic().span_note_without_error(multi, &msg);
+        }
+
+        // Report potential explicit instantiations to reduce SMT burden
+        // ZL TODO: refactor this
+        for (index, inst) in profiler.explicit_instantiations.iter().take(max).enumerate() {
+            // Report the quantifier
+            let bnd_info = qid_map
+                .get(&inst.qid)
+                .expect(format!("Failed to find quantifier {}", inst.qid).as_str());
+            let span = from_raw_span(&bnd_info.span.raw_span);
+
+            let msg = "Could use explicit quantifier instantiations to reduce SMT burden";
+            let mut multi = MultiSpan::from_span(span);
+            multi.push_span_label(span, "Quantifier introduced to context here".to_string());
+            compiler.diagnostic().span_note_without_error(span, &msg);
+            compiler.diagnostic().note_without_error(&format!("Try instantiation: {}", inst.terms.connect(", ")));
         }
     }
 

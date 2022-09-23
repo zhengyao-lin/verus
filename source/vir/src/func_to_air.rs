@@ -388,7 +388,7 @@ pub(crate) fn params_to_pars(params: &Params, allow_is_mut: bool) -> Pars {
     Arc::new(vec_map(params, |p| param_to_par(p, allow_is_mut)))
 }
 
-fn params_to_pre_post_pars(params: &Params, pre: bool) -> Pars {
+pub fn params_to_pre_post_pars(params: &Params, pre: bool) -> Pars {
     Arc::new(
         params
             .iter()

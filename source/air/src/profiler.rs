@@ -8,14 +8,22 @@ use z3tracer::{Model, ModelConfig};
 
 pub const PROVER_LOG_FILE: &str = "verus-prover-trace.log";
 
+pub const INST_TARGET_QUANT_PREFIX: &str = "inst_";
 pub const USER_QUANT_PREFIX: &str = "user_";
 pub const INTERNAL_QUANT_PREFIX: &str = "internal_";
+
+#[derive(Debug)]
+pub struct QuantInstantiation {
+    pub qid: String,
+    pub terms: Vec<String>,
+}
 
 #[derive(Debug)]
 /// Profiler for processing and displaying SMT performance data
 pub struct Profiler {
     //log_path: String,
     quantifier_stats: Vec<QuantCost>,
+    pub explicit_instantiations: Vec<QuantInstantiation>, // this includes quantifiers that can be used as targets for suggesting explicit instantiations
 }
 
 impl Profiler {
@@ -48,12 +56,15 @@ impl Profiler {
 
         // Analyze the quantifer costs
         let quant_costs = model.quant_costs();
+        
         let mut user_quant_costs = quant_costs
             .into_iter()
             .filter(|cost| cost.quant.starts_with(USER_QUANT_PREFIX))
             .collect::<Vec<_>>();
         user_quant_costs.sort_by_key(|v| v.instantiations * v.cost);
         user_quant_costs.reverse();
+
+        let mut explicit_instantiations = Vec::new();
 
         for (qi_key, quant_inst) in model.instantiations() {
             let quant_id = quant_inst.frame.quantifier();
@@ -62,20 +73,18 @@ impl Profiler {
                 .expect(format!("failed to find {:?} in the profiler's model", quant_id).as_str());
 
             if let Term::Quant { name: quant_name, .. } = quant_term {
-                if !quant_name.starts_with(USER_QUANT_PREFIX) {
+                if !quant_name.starts_with(INST_TARGET_QUANT_PREFIX) {
                     continue;
                 }
 
                 // model.log_instance(*qi_key).expect("failed to log stuff");
-
-                println!("User QI instance: {:?}, {:?}, {:?}", qi_key, quant_name, quant_inst);
+                // println!("User QI instance: {:?}, {:?}, {:?}", qi_key, quant_name, quant_inst);
 
                 match &quant_inst.frame {
                     QiFrame::NewMatch { terms, .. } => {
                         let venv = BTreeMap::new();
-                        for term_id in terms {
-                            println!("  inst term: {}", model.id_to_sexp(&venv, term_id).expect("failed to unparse term"));
-                        }
+                        let term_strings = terms.iter().map(|term_id| model.id_to_sexp(&venv, term_id).expect("failed to unparse term")).collect::<Vec<_>>();
+                        explicit_instantiations.push(QuantInstantiation { qid: quant_name.clone(), terms: term_strings });
                     },
                     _ => {
                         println!("unsupported")
@@ -84,7 +93,7 @@ impl Profiler {
             }
         }
 
-        Profiler { quantifier_stats: user_quant_costs }
+        Profiler { quantifier_stats: user_quant_costs, explicit_instantiations: explicit_instantiations }
     }
 
     pub fn quant_count(&self) -> usize {
