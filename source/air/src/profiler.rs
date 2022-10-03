@@ -3,7 +3,7 @@
 use std::io::{BufRead, Read};
 use std::collections::BTreeMap;
 use z3tracer::model::QuantCost;
-use z3tracer::syntax::{Term, QiFrame};
+use z3tracer::syntax::{Term, QiFrame, Meaning};
 use z3tracer::{Model, ModelConfig};
 
 pub const PROVER_LOG_FILE: &str = "verus-prover-trace.log";
@@ -82,9 +82,15 @@ impl Profiler {
 
                 match &quant_inst.frame {
                     QiFrame::NewMatch { terms, .. } => {
-                        let venv = BTreeMap::new();
-                        let term_strings = terms.iter().map(|term_id| model.id_to_sexp(&venv, term_id).expect("failed to unparse term")).collect::<Vec<_>>();
-                        explicit_instantiations.push(QuantInstantiation { qid: quant_name.clone(), terms: term_strings });
+                        // let venv = BTreeMap::new();
+                        let term_strings = terms
+                            .iter()
+                            .map(|term_id| Profiler::sexp_to_rust_exp(&model, &model.term_data(term_id).expect("failed to unparse term").term))
+                            .collect::<Option<Vec<_>>>();
+                        
+                        if let Some(term_strings) = term_strings {
+                            explicit_instantiations.push(QuantInstantiation { qid: quant_name.clone(), terms: term_strings });
+                        }
                     },
                     _ => {
                         println!("unsupported")
@@ -94,6 +100,56 @@ impl Profiler {
         }
 
         Profiler { quantifier_stats: user_quant_costs, explicit_instantiations: explicit_instantiations }
+    }
+
+    fn sexp_to_rust_exp(model: &Model, term: &Term) -> Option<String> {
+        match term {
+            // ZL TODO: use the constants in vir::def once we move this to a better place
+            Term::App { name, args, meaning }
+            if [ "I", "B", "S", "C", "%I", "%B", "&S", "%C" ].contains(&name.as_str()) &&
+               args.len() == 1 => {
+                Profiler::sexp_to_rust_exp(model, &model.term_data(&args[0]).expect("term not found").term)
+            }
+
+            // Local variable, ends with @ and the actual name is the one separated by ~
+            Term::App { name, args, meaning }
+            if name.ends_with("@") &&
+               name.contains('~') &&
+               args.is_empty() => {
+                name.split('~').nth(0).map(|s| s.to_string())
+            }
+
+            // Global
+            Term::App { name, args, meaning }
+            if name.ends_with("?") &&
+               name.contains('.') => {
+                let name = name.split('.').nth(0)?;
+
+                if args.is_empty() {
+                    Some(name.to_string())
+                } else {
+                    let arg_string = args.iter()
+                        .map(|id| Profiler::sexp_to_rust_exp(model, &model.term_data(id).ok()?.term))
+                        .collect::<Option<Vec<_>>>()?;
+                    Some(format!("{}({})", name, arg_string.join(", ")))
+                }
+            }
+
+            Term::App { name, args, meaning }
+            if name.as_str() == "Int" &&
+               args.is_empty() => {
+                meaning.as_ref().map(|Meaning { theory: _, sexp }| sexp.to_string())
+            }
+
+            // ZL TODO: Builtin expressions such as Mul
+
+            _ => {
+                // let venv = BTreeMap::new();
+                // let name = model.term_to_sexp(&venv, term).expect("unable to print s-expression");
+                println!("unsupported s-expression: {:?}", term);
+                None
+            }
+        }
     }
 
     pub fn quant_count(&self) -> usize {

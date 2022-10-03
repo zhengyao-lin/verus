@@ -15,7 +15,7 @@ use crate::def::{
     suffix_typ_param_id, unique_local, variant_field_ident, variant_ident, ProverChoice, SnapPos,
     SpanKind, Spanned, FUEL_BOOL, FUEL_BOOL_DEFAULT, FUEL_DEFAULTS, FUEL_ID, FUEL_PARAM, FUEL_TYPE,
     POLY, SNAPSHOT_ASSIGN, SNAPSHOT_CALL, SNAPSHOT_PRE, SUCC, SUFFIX_SNAP_JOIN, SUFFIX_SNAP_MUT,
-    SUFFIX_SNAP_WHILE_BEGIN, SUFFIX_SNAP_WHILE_END,
+    SUFFIX_SNAP_WHILE_BEGIN, SUFFIX_SNAP_WHILE_END, DUMMY_PARAM
 };
 use crate::def::{CommandsWithContext, CommandsWithContextX};
 use crate::inv_masks::MaskSet;
@@ -1366,12 +1366,10 @@ fn stm_to_stmts(ctx: &Ctx, state: &mut State, stm: &Stm) -> Result<Vec<Stmt>, Vi
                 // Check if there is only one ensure clause and it starts with forall
                 if let [ only_ensure_exp ] = func.x.ensure.as_slice() {
                     if let crate::ast::ExprX::Quant(quant, binders, body) = &only_ensure_exp.x {
-                        println!("function params: {:?}", func.x.params);
-
                         if quant.quant == air::ast::Quant::Forall &&
                            !func.x.has_return() &&
                            func.x.params.len() == 1 &&
-                           func.x.params[0].x.name.as_str() == "no%param" { // ZL TODO: depends on the specific encoding
+                           func.x.params[0].x.name.as_str() == DUMMY_PARAM { // ZL TODO: depends on the specific encoding
                             // ZL TODO: Current assumptions:
                             // 1. There is only one ensure clause
                             // 2. The ensure clause starts with forall

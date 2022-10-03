@@ -268,10 +268,10 @@ impl Verifier {
         );
         compiler.diagnostic().note_without_error(&msg);
 
-        println!("qid_map:");
-        for (key, value) in qid_map {
-            println!("{}: {:?}", key, value);
-        }
+        // println!("qid_map:");
+        // for (key, value) in qid_map {
+        //     println!("{}: {:?}", key, value);
+        // }
 
         for (index, cost) in profiler.iter().take(max).enumerate() {
             // Report the quantifier
@@ -315,7 +315,7 @@ impl Verifier {
             let mut multi = MultiSpan::from_span(span);
             multi.push_span_label(span, "Quantifier introduced to context here".to_string());
             compiler.diagnostic().span_note_without_error(span, &msg);
-            compiler.diagnostic().note_without_error(&format!("Try instantiation: {}", inst.terms.connect(", ")));
+            compiler.diagnostic().note_without_error(&format!("Try instantiation: ({})", inst.terms.connect(", ")));
         }
     }
 
