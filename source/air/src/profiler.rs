@@ -37,7 +37,7 @@ impl Profiler {
         );
         let line_count = file.lines().count();
 
-        println!("{}", std::fs::read_to_string(path).expect("Unable to read file"));
+        // println!("{}", std::fs::read_to_string(path).expect("Unable to read file"));
 
         // Reset to actually parse the file
         let file = std::io::BufReader::new(

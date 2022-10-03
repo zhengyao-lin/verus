@@ -1366,7 +1366,12 @@ fn stm_to_stmts(ctx: &Ctx, state: &mut State, stm: &Stm) -> Result<Vec<Stmt>, Vi
                 // Check if there is only one ensure clause and it starts with forall
                 if let [ only_ensure_exp ] = func.x.ensure.as_slice() {
                     if let crate::ast::ExprX::Quant(quant, binders, body) = &only_ensure_exp.x {
-                        if quant.quant == air::ast::Quant::Forall && !func.x.has_return() && func.x.params.is_empty() {
+                        println!("function params: {:?}", func.x.params);
+
+                        if quant.quant == air::ast::Quant::Forall &&
+                           !func.x.has_return() &&
+                           func.x.params.len() == 1 &&
+                           func.x.params[0].x.name.as_str() == "no%param" { // ZL TODO: depends on the specific encoding
                             // ZL TODO: Current assumptions:
                             // 1. There is only one ensure clause
                             // 2. The ensure clause starts with forall
