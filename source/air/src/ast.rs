@@ -164,7 +164,7 @@ pub enum DeclX {
     Const(Ident, Typ),
     Fun(Ident, Typs, Typ),
     Var(Ident, Typ),
-    Axiom(Expr),
+    Axiom(Expr), // Ident for named assertions
 }
 
 pub type Query = Arc<QueryX>;
@@ -183,4 +183,5 @@ pub enum CommandX {
     SetOption(Ident, Ident), // set-option option value (no colon on the option)
     Global(Decl),            // global declarations
     CheckValid(Query), // SMT check-sat (reporting validity rather than satisfiability), Possibly singular checks
+    GetUnsatCore,
 }

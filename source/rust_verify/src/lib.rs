@@ -42,3 +42,4 @@ pub mod singular;
 pub mod typecheck;
 pub mod util;
 pub mod verifier;
+pub mod profiler;

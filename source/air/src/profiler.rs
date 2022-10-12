@@ -78,11 +78,15 @@ impl Profiler {
                 }
 
                 // model.log_instance(*qi_key).expect("failed to log stuff");
-                // println!("User QI instance: {:?}, {:?}, {:?}", qi_key, quant_name, quant_inst);
+                println!("User QI instance: {:?}, {:?}, {:?}", qi_key, quant_name, quant_inst);
 
                 match &quant_inst.frame {
                     QiFrame::NewMatch { terms, .. } => {
-                        // let venv = BTreeMap::new();
+                        let venv = BTreeMap::new();
+                        for term_id in terms {
+                            println!("  inst term: {}", model.id_to_sexp(&venv, term_id).expect("failed to unparse term"));
+                        }
+                        
                         let term_strings = terms
                             .iter()
                             .map(|term_id| Profiler::sexp_to_rust_exp(&model, &model.term_data(term_id).expect("failed to unparse term").term))

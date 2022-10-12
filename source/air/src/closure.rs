@@ -416,6 +416,14 @@ fn simplify_expr(ctxt: &mut Context, state: &mut State, expr: &Expr) -> (Typ, Ex
             (typ, expr.clone(), term)
         }
         ExprX::Apply(x, args) => {
+            // ZL TODO: hacky!
+            if x.as_str() == "!" {
+                if let Some(e) = args.first() {
+                    let (typ, _, _) = simplify_expr(ctxt, state, &e);
+                    return (typ, expr.clone(), None)
+                }
+            }
+
             let typ = match ctxt.typing.get(x) {
                 Some(DeclaredX::Fun(_, typ)) => typ.clone(),
                 _ => panic!("internal error: missing function {}", x),

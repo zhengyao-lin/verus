@@ -3,10 +3,11 @@ use crate::context::{ArchContextX, ContextX, ErasureInfo};
 use crate::debugger::Debugger;
 use crate::unsupported;
 use crate::util::{error, from_raw_span, signalling};
-use air::ast::{Command, CommandX, Commands};
+use crate::profiler::{QuantifierProfiler, Instantiation};
+use air::profiler::Profiler;
+use air::ast::{Command, CommandX, Commands, Quant, ExprX, BindX, BinderX, QueryX, StmtX, DeclX};
 use air::context::{QueryContext, ValidityResult};
 use air::errors::{Error, ErrorLabel};
-use air::profiler::Profiler;
 use rustc_hir::OwnerNode;
 use rustc_interface::interface::Compiler;
 
@@ -253,6 +254,30 @@ impl Verifier {
         }
     }
 
+    fn print_quant_profile_stats(
+        &self,
+        compiler: &Compiler,
+        quant_profiler: QuantifierProfiler,
+        qid_map: &HashMap<String, vir::sst::BndInfo>,
+    ) {
+        for instantiation in quant_profiler.instantiations {
+            let bnd_info = qid_map
+                .get(&instantiation.qid)
+                .expect(format!("Failed to find quantifier {}", instantiation.qid).as_str());
+            let span = from_raw_span(&bnd_info.span.raw_span);
+
+            let msg = "Could use explicit quantifier instantiations to reduce SMT burden";
+            let mut multi = MultiSpan::from_span(span);
+            multi.push_span_label(span, "Quantifier introduced to context here".to_string());
+            compiler.diagnostic().span_note_without_error(span, &msg);
+            compiler.diagnostic().note_without_error(&format!(
+                "Try instantiation: ({}), in unsat core: {}",
+                instantiation.rust_expr_strings.join(", "),
+                instantiation.in_unsat_core.get(),
+            ));
+        }
+    }
+
     fn print_profile_stats(
         &self,
         compiler: &Compiler,
@@ -333,6 +358,7 @@ impl Verifier {
         command: &Command,
         context: &(&air::ast::Span, &str),
         is_singular: bool,
+        no_pop: bool, // ZL TODO: hacky
     ) -> bool {
         let report_long_running = || {
             let mut counter = 0;
@@ -538,7 +564,7 @@ impl Verifier {
             compiler.diagnostic().span_note_without_error(multispan, &msg);
         }
 
-        if is_check_valid && !is_singular {
+        if is_check_valid && !is_singular && !no_pop {
             air_context.finish_query();
         }
 
@@ -577,6 +603,7 @@ impl Verifier {
         function_name: Option<&Fun>,
         comment: &str,
         desc_prefix: Option<&str>,
+        no_pop: bool,
     ) -> bool {
         if let Some(verify_function) = &self.args.verify_function {
             if let Some(function_name) = function_name {
@@ -607,6 +634,7 @@ impl Verifier {
                 &command,
                 &(span, &desc),
                 *prover_choice == vir::def::ProverChoice::Singular,
+                no_pop,
             );
             invalidity = invalidity || result_invalidity;
         }
@@ -744,6 +772,294 @@ impl Verifier {
         Ok(air_context)
     }
 
+    // TODO: variable capturing
+    fn substitute_expr(&self, substitution: &HashMap<String, &air::ast::Expr>, expr: &air::ast::Expr) -> air::ast::Expr {
+        match expr.as_ref() {
+            ExprX::Var(id) => {
+                if let Some(&substitute) = substitution.get(id.as_ref()) {
+                    substitute.clone()
+                } else {
+                    expr.clone()
+                }
+            },
+
+            ExprX::Const(_) | ExprX::Old(_, _) => expr.clone(),
+
+            ExprX::Apply(id, exprs) =>
+                Arc::new(ExprX::Apply(id.clone(), self.substitute_exprs(substitution, exprs))),
+
+            ExprX::ApplyLambda(typ, expr, exprs) =>
+                Arc::new(ExprX::ApplyLambda(typ.clone(), self.substitute_expr(substitution, expr), self.substitute_exprs(substitution, exprs))),
+
+            ExprX::Unary(op, expr) =>
+                Arc::new(ExprX::Unary(op.clone(), self.substitute_expr(substitution, expr))),
+
+            ExprX::Binary(op, expr1, expr2) =>
+                Arc::new(ExprX::Binary(op.clone(), self.substitute_expr(substitution, expr1), self.substitute_expr(substitution, expr2))),
+
+            ExprX::Multi(op, exprs) =>
+                Arc::new(ExprX::Multi(op.clone(), self.substitute_exprs(substitution, exprs))),
+
+            ExprX::IfElse(expr1, expr2, expr3) =>
+                Arc::new(ExprX::IfElse(
+                    self.substitute_expr(substitution, expr1),
+                    self.substitute_expr(substitution, expr2),
+                    self.substitute_expr(substitution, expr3),
+                )),
+
+            ExprX::LabeledAxiom(label, expr) =>
+                Arc::new(ExprX::LabeledAxiom(label.clone(), self.substitute_expr(substitution, expr))),
+
+            ExprX::LabeledAssertion(err, expr) =>
+                Arc::new(ExprX::LabeledAssertion(err.clone(), self.substitute_expr(substitution, expr))),
+
+            ExprX::Bind(bind, expr) => {
+                let mut shadowed_substitution = substitution.clone();
+
+                let new_bind = match bind.as_ref() {
+                    BindX::Let(binders) => {
+                        let new_binders = binders
+                            .iter()
+                            .map(|binder|
+                                Arc::new(BinderX { name: binder.name.clone(), a: self.substitute_expr(substitution, &binder.a) })
+                            )
+                            .collect::<Vec<_>>();
+
+                        for binder in binders.iter() {
+                            shadowed_substitution.remove(binder.name.as_ref());
+                        }
+
+                        Arc::new(BindX::Let(Arc::new(new_binders)))
+                    },
+
+                    BindX::Lambda(binders) => {
+                        for binder in binders.iter() {
+                            shadowed_substitution.remove(binder.name.as_ref());
+                        }
+                        bind.clone()
+                    },
+
+                    // TODO: what is the SMT encoding of this?
+                    BindX::Choose(binders, triggers, qid, expr) => {
+                        for binder in binders.iter() {
+                            shadowed_substitution.remove(binder.name.as_ref());
+                        }
+
+                        Arc::new(BindX::Choose(
+                            binders.clone(),
+                            triggers.clone(),
+                            qid.clone(),
+                            self.substitute_expr(substitution, expr),
+                        ))
+                    },
+
+                    BindX::Quant(quant, binders, triggers, qid) => {
+                        for binder in binders.iter() {
+                            shadowed_substitution.remove(binder.name.as_ref());
+                        }
+                        
+                        bind.clone()
+                    },
+                };
+                let new_body = self.substitute_expr(&shadowed_substitution, expr);
+                Arc::new(ExprX::Bind(new_bind, new_body))
+            }
+        }
+    }
+
+    // Same as above but for Exprs
+    fn substitute_exprs(&self, substitution: &HashMap<String, &air::ast::Expr>, exprs: &air::ast::Exprs) -> air::ast::Exprs {
+        Arc::new(exprs.iter().map(|expr| self.substitute_expr(substitution, expr)).collect())
+    }
+
+    // Replace universally quantified formulas in expr with instantiations specified in instantiations
+    fn instantiate_expr(&self, instantiations: &HashMap<String, Vec<Arc<Instantiation>>>, expr: &air::ast::Expr) -> air::ast::Expr {
+        match expr.as_ref() {
+            ExprX::Const(_) | ExprX::Var(_) | ExprX::Old(_, _) => expr.clone(),
+
+            ExprX::Apply(id, exprs) =>
+                Arc::new(ExprX::Apply(id.clone(), self.instantiate_exprs(instantiations, exprs))),
+
+            ExprX::ApplyLambda(typ, expr, exprs) =>
+                Arc::new(ExprX::ApplyLambda(typ.clone(), self.instantiate_expr(instantiations, expr), self.instantiate_exprs(instantiations, exprs))),
+
+            ExprX::Unary(op, expr) =>
+                Arc::new(ExprX::Unary(op.clone(), self.instantiate_expr(instantiations, expr))),
+
+            ExprX::Binary(op, expr1, expr2) =>
+                Arc::new(ExprX::Binary(op.clone(), self.instantiate_expr(instantiations, expr1), self.instantiate_expr(instantiations, expr2))),
+
+            ExprX::Multi(op, exprs) =>
+                Arc::new(ExprX::Multi(op.clone(), self.instantiate_exprs(instantiations, exprs))),
+
+            ExprX::IfElse(expr1, expr2, expr3) =>
+                Arc::new(ExprX::IfElse(
+                    self.instantiate_expr(instantiations, expr1),
+                    self.instantiate_expr(instantiations, expr2),
+                    self.instantiate_expr(instantiations, expr3),
+                )),
+
+            ExprX::LabeledAxiom(label, expr) =>
+                Arc::new(ExprX::LabeledAxiom(label.clone(), self.instantiate_expr(instantiations, expr))),
+
+            ExprX::LabeledAssertion(err, expr) =>
+                Arc::new(ExprX::LabeledAssertion(err.clone(), self.instantiate_expr(instantiations, expr))),
+
+            ExprX::Bind(bind, body) => {
+                let mut new_body = self.instantiate_expr(instantiations, body);
+                
+                match bind.as_ref() {
+                    BindX::Let(binders) => {
+                        let new_binders = binders
+                            .iter()
+                            .map(|binder|
+                                Arc::new(BinderX { name: binder.name.clone(), a: self.instantiate_expr(instantiations, &binder.a) })
+                            )
+                            .collect::<Vec<_>>();
+
+                        let new_bind = Arc::new(BindX::Let(Arc::new(new_binders)));
+
+                        Arc::new(ExprX::Bind(new_bind, new_body))
+                    },
+
+                    BindX::Lambda(_) => Arc::new(ExprX::Bind(bind.clone(), new_body)),
+
+                    // TODO: what is the SMT encoding of this?
+                    BindX::Choose(binders, triggers, qid, expr) => {
+                        let new_bind = Arc::new(BindX::Choose(
+                            binders.clone(),
+                            triggers.clone(),
+                            qid.clone(),
+                            self.instantiate_expr(instantiations, expr),
+                        ));
+
+                        Arc::new(ExprX::Bind(new_bind, new_body))
+                    },
+
+                    // If there is no QID, we just ignore this quantifier
+                    BindX::Quant(quant, binders, triggers, None) =>
+                        Arc::new(ExprX::Bind(bind.clone(), new_body)),
+
+                    BindX::Quant(quant, binders, triggers, Some(qid)) => {
+                        if let Some(instantiations) = instantiations.get(qid.as_ref()) {
+                            let mut substituted_exprs = Vec::new();
+
+                            for instantiation in instantiations {
+                                assert!(instantiation.terms.len() == binders.len());
+
+                                let mut substitution = HashMap::new();
+                                for (binder, term) in binders.iter().zip(instantiation.terms.iter()) {
+                                    substitution.insert(binder.name.to_string(), term);
+                                }
+
+                                let substituted_expr = self.substitute_expr(&substitution, &new_body);
+                                substituted_exprs.push(substituted_expr);
+                            }
+
+                            Arc::new(ExprX::Multi(air::ast::MultiOp::And, Arc::new(substituted_exprs)))
+                        } else {
+                            Arc::new(ExprX::Bind(bind.clone(), new_body))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Same as above but for Exprs
+    fn instantiate_exprs(&self, instantiations: &HashMap<String, Vec<Arc<Instantiation>>>, exprs: &air::ast::Exprs) -> air::ast::Exprs {
+        Arc::new(exprs.iter().map(|expr| self.instantiate_expr(instantiations, expr)).collect())
+    }
+
+    fn instantiate_query_helper(
+        &self,
+        instantiations: &HashMap<String, Vec<Arc<Instantiation>>>,
+        new_stmts: &mut Vec<air::ast::Stmt>,
+        new_axioms: &mut Vec<air::ast::Decl>,
+        stmts: &air::ast::Stmts,
+    ) {
+        for stmt in stmts.iter() {
+            match stmt.as_ref() {
+                // If we have a assume statement starting with a universal quantifier
+                // look up the corresponding QID in the instantiation map
+                // If found, replace it with instantiations
+                StmtX::Assume(expr) => {
+                    if let ExprX::Bind(bind, body) = expr.as_ref() {
+                        if let BindX::Quant(
+                            air::ast::Quant::Forall,
+                            binders,
+                            triggers,
+                            Some(qid),
+                        ) = bind.as_ref() {
+                            if let Some(instantiations) = instantiations.get(qid.as_ref()) {
+                                for instantiation in instantiations {
+                                    assert!(instantiation.terms.len() == binders.len());
+    
+                                    let mut substitution = HashMap::new();
+                                    for (binder, term) in binders.iter().zip(instantiation.terms.iter()) {
+                                        substitution.insert(binder.name.to_string(), term);
+                                    }
+    
+                                    let substituted_expr = self.substitute_expr(&substitution, &body);
+                                    new_axioms.push(Arc::new(DeclX::Axiom(
+                                        Arc::new(ExprX::Apply(
+                                            // A hack to ask AIR to name these instances
+                                            Arc::new("!".to_string()),
+                                            Arc::new(vec![
+                                                substituted_expr,
+                                                Arc::new(ExprX::Var(Arc::new(":named".to_string()))),
+                                                // ZL TODO: add a def for this constant
+                                                Arc::new(ExprX::Var(Arc::new("named-instance-".to_string() + &instantiation.index.to_string()))),
+                                            ])
+                                        ))
+                                    )));
+                                }
+                            
+                                continue;
+                            } // TODO: should we still keep the quantifiers in this case?
+                            
+                            // new_axioms.push(Arc::new(DeclX::Axiom(self.instantiate_expr(instantiations, expr))));
+                        }
+                    }
+
+                    new_stmts.push(stmt.clone());
+                },
+
+                StmtX::Block(stmts) => self.instantiate_query_helper(instantiations, new_stmts, new_axioms, stmts),
+
+                StmtX::Assert(span, expr) => new_stmts.push(stmt.clone()),
+
+                // TODO: what do these do?
+                StmtX::Havoc(_) => new_stmts.push(stmt.clone()),
+                StmtX::Snapshot(_) => new_stmts.push(stmt.clone()),
+                StmtX::DeadEnd(_) => new_stmts.push(stmt.clone()),
+                StmtX::Switch(_) => new_stmts.push(stmt.clone()),
+                StmtX::Assign(_, _) => new_stmts.push(stmt.clone()),
+            }
+        }
+    }
+
+    // Same as above but for Stmt and only instantiates Assume statements
+    // and the instantiated Assume statements are converted into Axioms for convenience
+    fn instantiate_query(&self, instantiations: &HashMap<String, Vec<Arc<Instantiation>>>, query: &air::ast::Query)
+    -> air::ast::Query {
+
+        let stmts = match query.assertion.as_ref() {
+            StmtX::Block(stmts) => stmts,
+            _ => return query.clone(), // nothing to change
+        };
+
+        let mut new_stmts = Vec::new();
+        let mut new_axioms = Vec::new();
+
+        self.instantiate_query_helper(instantiations, &mut new_stmts, &mut new_axioms, stmts);
+
+        Arc::new(QueryX {
+            local: Arc::new(query.local.iter().cloned().chain(new_axioms.iter().cloned()).collect()),
+            assertion: Arc::new(StmtX::Block(Arc::new(new_stmts))),
+        })
+    }
+
     // Verify a single module
     fn verify_module(
         &mut self,
@@ -751,6 +1067,7 @@ impl Verifier {
         krate: &Krate,
         module: &vir::ast::Path,
         ctx: &mut vir::context::Ctx,
+        quant_profiler: &mut QuantifierProfiler,
     ) -> Result<(Duration, Duration), VirErr> {
         let mut air_context = self.new_air_context_with_prelude(
             module,
@@ -918,6 +1235,7 @@ impl Verifier {
                     Some(&function.x.name),
                     &("Function-Termination ".to_string() + &fun_as_rust_dbg(f)),
                     Some("function termination: "),
+                    false,
                 );
                 let check_recommends = function.x.attrs.check_recommends;
                 if (invalidity && !self.args.no_auto_recommends_check) || check_recommends {
@@ -948,6 +1266,7 @@ impl Verifier {
                             Some(&function.x.name),
                             &(s.to_string() + &fun_as_rust_dbg(&function.x.name)),
                             Some("recommends check: "),
+                            false,
                         );
                     }
                 }
@@ -1050,6 +1369,9 @@ impl Verifier {
                         &mut air_context
                     };
                     let desc_prefix = recommends_rerun.then(|| "recommends check: ");
+                    
+                    println!("\ncommands {:?} {:?}\n", function.x.name.path, command.commands);
+                    
                     let command_invalidity = self.run_commands_queries(
                         compiler,
                         error_as,
@@ -1062,12 +1384,86 @@ impl Verifier {
                         Some(&function.x.name),
                         &(s.to_string() + &fun_as_rust_dbg(&function.x.name)),
                         desc_prefix,
+                        false,
                     );
                     if *prover_choice == vir::def::ProverChoice::Spinoff {
                         let (time_smt_init, time_smt_run) = query_air_context.get_time();
                         spunoff_time_smt_init += time_smt_init;
                         spunoff_time_smt_run += time_smt_run;
                     }
+
+                    // ZL TODO: Gather more profiling information about the QI
+                    // by running the command again with explicit instantiations
+                    let new_instantiations = quant_profiler.process_function(&function.x.name.path);
+                    let mut organized_instantiations = HashMap::new();
+                    
+                    for new_instantiation in new_instantiations {
+                        if !organized_instantiations.contains_key(&new_instantiation.qid) {
+                            organized_instantiations.insert(new_instantiation.qid.to_string(), Vec::new());
+                        }
+
+                        organized_instantiations.get_mut(&new_instantiation.qid).expect("").push(new_instantiation.clone());
+
+                        // println!("found new instantiation {:?}", new_instantiation.clone());
+                    }
+
+                    let instantiated_command = Arc::new(CommandsWithContextX {
+                        span: command.span.clone(),
+                        desc: command.desc.clone(),
+                        commands: Arc::new(command.commands.iter()
+                            .map(|cmd| match cmd.as_ref() {
+                                CommandX::CheckValid(query) =>
+                                    Arc::new(CommandX::CheckValid(self.instantiate_query(&organized_instantiations, query))),
+
+                                _ => cmd.clone(),
+                            })
+                            .collect()),
+                        prover_choice: command.prover_choice,
+                        skip_recommends: command.skip_recommends,
+                    });
+                    println!("\ninstantiated commands {:?} {:?}\n", function.x.name.path, instantiated_command.commands);
+
+                    let instantiated_command_invalidity = self.run_commands_queries(
+                        compiler,
+                        error_as,
+                        query_air_context,
+                        instantiated_command.clone(),
+                        &HashMap::new(),
+                        &snap_map,
+                        &ctx.global.qid_map.borrow(),
+                        module,
+                        Some(&function.x.name),
+                        &(s.to_string() + &fun_as_rust_dbg(&function.x.name) + " (QI profiler)"),
+                        desc_prefix,
+                        true, // pop later! (very hacky)
+                    );
+                    println!("instantiated commands invalidity: {} {}", instantiated_command_invalidity, command_invalidity);
+
+                    if instantiated_command_invalidity != command_invalidity {
+                        panic!("unexpected QI profiler result");
+                    }
+
+                    // Query the prover for unsat core
+                    let result = query_air_context.command(&Arc::new(CommandX::GetUnsatCore), Default::default());
+                    match result {
+                        ValidityResult::UnexpectedOutput(unsat_core_string) => {
+                            println!("unsat core: {}", unsat_core_string);
+
+                            for instance_name in unsat_core_string.split(' ') {
+                                if instance_name.starts_with("named-instance-") {
+                                    let instance_index = instance_name.chars().skip("named-instance-".len()).collect::<String>().parse::<usize>().unwrap();
+                                    quant_profiler.mark_instance_used(instance_index);
+                                    println!("instance {} is used", instance_index);
+                                }
+                            }
+                        },
+
+                        _ => {
+                            println!("failed to get unsat core: {:?}", result);
+                        }
+                    }
+
+                    query_air_context.finish_query();
 
                     function_invalidity = function_invalidity || command_invalidity;
                 }
@@ -1095,6 +1491,7 @@ impl Verifier {
         krate: &Krate,
         module: &vir::ast::Path,
         mut global_ctx: vir::context::GlobalCtx,
+        quant_profiler: &mut QuantifierProfiler,
     ) -> Result<vir::context::GlobalCtx, VirErr> {
         let module_name = module_name(module);
         if module.segments.len() == 0 {
@@ -1121,7 +1518,7 @@ impl Verifier {
         }
 
         let (time_smt_init, time_smt_run) =
-            self.verify_module(compiler, &poly_krate, module, &mut ctx)?;
+            self.verify_module(compiler, &poly_krate, module, &mut ctx, quant_profiler)?;
 
         global_ctx = ctx.free();
 
@@ -1228,16 +1625,24 @@ impl Verifier {
             module_ids_to_verify
         };
 
+        let mut quant_profiler = QuantifierProfiler::new();
+
         for module in &module_ids_to_verify {
-            global_ctx = self.verify_module_outer(compiler, &krate, module, global_ctx)?;
+            global_ctx = self.verify_module_outer(compiler, &krate, module, global_ctx, &mut quant_profiler)?;
         }
 
         let verified_modules: HashSet<_> = module_ids_to_verify.iter().collect();
 
+        // quant_profiler.process_function(&Arc::new(vir::ast::PathX { krate: None, segments: Arc::new(Vec::new()) }));
+
         if self.args.profile_all {
-            let profiler = Profiler::new();
-            self.print_profile_stats(compiler, profiler, &global_ctx.qid_map.borrow());
+            self.print_quant_profile_stats(compiler, quant_profiler, &global_ctx.qid_map.borrow());
         }
+
+        // if self.args.profile_all {
+        //     let profiler = Profiler::new();
+        //     self.print_profile_stats(compiler, profiler, &global_ctx.qid_map.borrow());
+        // }
         // Log/display triggers
         if self.args.log_all || self.args.log_triggers {
             let mut file = self.create_log_file(None, None, crate::config::TRIGGERS_FILE_SUFFIX)?;

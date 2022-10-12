@@ -220,6 +220,9 @@ impl Context {
             self.set_z3_param_bool("smt.delay_units", true, true);
             self.set_z3_param_u32("smt.arith.solver", 2, true);
             self.set_z3_param_bool("smt.arith.nl", false, true);
+
+            // ZL TODO: use the profile flag
+            self.set_z3_param_bool("produce-unsat-cores", true, true);
         } else {
             if write_to_logs {
                 self.log_set_z3_param(option, &value.to_string());
@@ -429,6 +432,21 @@ impl Context {
                 }
             }
             CommandX::CheckValid(query) => self.check_valid(&query, query_context),
+            CommandX::GetUnsatCore => {
+                self.smt_log.log_word("get-unsat-core");
+                let smt_data = self.smt_log.take_pipe_data();
+                let smt_output = self.get_smt_process().send_commands(smt_data);
+
+                if smt_output.len() != 1 ||
+                   smt_output[0].starts_with("(error ") ||
+                   !smt_output[0].starts_with("(") ||
+                   !smt_output[0].ends_with(")") {
+                    ValidityResult::TypeError(smt_output.join("\n"))
+                } else {
+                    // ZL TODO: change UnexpectedOutput to something that makes more sense
+                    ValidityResult::UnexpectedOutput(smt_output[0].chars().skip(1).take(smt_output[0].len() - 2).collect())
+                }
+            },
         }
     }
 }
