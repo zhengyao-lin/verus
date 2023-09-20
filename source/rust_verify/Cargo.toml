@@ -16,6 +16,7 @@ num-bigint = "0.4.4"
 num-format = "0.4.0"
 getopts = { git = "https://github.com/utaal/getopts.git", branch = "parse-partial" }
 regex = "1"
+z3tracer = { git = "https://github.com/verus-lang/smt2utils.git", rev = "ff60e58b6c05d0daed6ab9177dd70aa285dc6afa" }
 
 [target.'cfg(windows)'.dependencies]
 win32job = "1"

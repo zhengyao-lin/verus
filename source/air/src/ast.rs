@@ -200,4 +200,5 @@ pub enum CommandX {
     SetOption(Ident, Ident), // set-option option value (no colon on the option)
     Global(Decl),            // global declarations
     CheckValid(Query), // SMT check-sat (reporting validity rather than satisfiability), Possibly singular checks
+    GetUnsatCore,
 }

@@ -201,9 +201,24 @@ fn check_expr(typing: &mut Typing, expr: &Expr) -> Result<Typ, TypeError> {
             (true, Some(DeclaredX::Var { typ, .. })) => Ok(typ.clone()),
             (true, _) => Err(format!("use of undeclared variable {}", x)),
         },
-        ExprX::Apply(x, es) => match typing.get(x).cloned() {
-            Some(DeclaredX::Fun(f_typs, f_typ)) => check_exprs(typing, x, &f_typs, &f_typ, es),
-            _ => Err(format!("use of undeclared function {}", x)),
+        // ExprX::Apply(x, es) => match typing.get(x).cloned() {
+        //     Some(DeclaredX::Fun(f_typs, f_typ)) => check_exprs(typing, x, &f_typs, &f_typ, es),
+        //     _ => Err(format!("use of undeclared function {}", x)),
+        // },
+        ExprX::Apply(x, es) => {
+            // ZL TODO: hacky!
+            if x.as_str() == "!" {
+                if let Some(e) = es.first() {
+                    check_expr(typing, e)
+                } else {
+                    Err(format!("ill formed parameter call"))
+                }
+            } else {
+                match typing.get(x).cloned() {
+                    Some(DeclaredX::Fun(f_typs, f_typ)) => check_exprs(typing, x, &f_typs, &f_typ, es),
+                    _ => Err(format!("use of undeclared function {}", x)),
+                }
+            }
         },
         ExprX::ApplyLambda(t, e0, es) => {
             let t0 = check_expr(typing, e0)?;

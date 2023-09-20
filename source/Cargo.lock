@@ -38,7 +38,7 @@ dependencies = [
  "sise",
  "win32job",
  "yansi",
- "z3tracer",
+ "z3tracer 0.11.2 (git+https://github.com/verus-lang/smt2utils.git?rev=f58678dad0bd7fbd28f105c48f49ce0fadd047e2)",
 ]
 
 [[package]]
@@ -1235,6 +1235,7 @@ dependencies = [
  "sise",
  "vir",
  "win32job",
+ "z3tracer 0.11.2 (git+https://github.com/verus-lang/smt2utils.git?rev=ff60e58b6c05d0daed6ab9177dd70aa285dc6afa)",
 ]
 
 [[package]]
@@ -1420,6 +1421,23 @@ checksum = "62bb4feee49fdd9f707ef802e22365a35de4b7b299de4763d44bfea899442ff9"
 name = "smt2parser"
 version = "0.6.1"
 source = "git+https://github.com/verus-lang/smt2utils.git?rev=f58678dad0bd7fbd28f105c48f49ce0fadd047e2#f58678dad0bd7fbd28f105c48f49ce0fadd047e2"
+dependencies = [
+ "fst",
+ "itertools",
+ "num",
+ "permutation_iterator",
+ "pomelo",
+ "rand 0.8.5",
+ "serde",
+ "structopt",
+ "strum",
+ "thiserror",
+]
+
+[[package]]
+name = "smt2parser"
+version = "0.6.1"
+source = "git+https://github.com/verus-lang/smt2utils.git?rev=ff60e58b6c05d0daed6ab9177dd70aa285dc6afa#ff60e58b6c05d0daed6ab9177dd70aa285dc6afa"
 dependencies = [
  "fst",
  "itertools",
@@ -2063,7 +2081,20 @@ dependencies = [
  "indicatif",
  "once_cell",
  "petgraph",
- "smt2parser",
+ "smt2parser 0.6.1 (git+https://github.com/verus-lang/smt2utils.git?rev=f58678dad0bd7fbd28f105c48f49ce0fadd047e2)",
+ "structopt",
+ "thiserror",
+]
+
+[[package]]
+name = "z3tracer"
+version = "0.11.2"
+source = "git+https://github.com/verus-lang/smt2utils.git?rev=ff60e58b6c05d0daed6ab9177dd70aa285dc6afa#ff60e58b6c05d0daed6ab9177dd70aa285dc6afa"
+dependencies = [
+ "indicatif",
+ "once_cell",
+ "petgraph",
+ "smt2parser 0.6.1 (git+https://github.com/verus-lang/smt2utils.git?rev=ff60e58b6c05d0daed6ab9177dd70aa285dc6afa)",
  "structopt",
  "thiserror",
 ]

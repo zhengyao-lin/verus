@@ -5,12 +5,14 @@ use crate::spans::{SpanContext, SpanContextX};
 use crate::user_filter::UserFilter;
 use crate::util::error;
 use crate::verus_items::VerusItems;
-use air::ast::{Command, CommandX, Commands};
+use crate::profiler::{QuantifierProfiler, Instantiation};
+use air::ast::{Command, CommandX, Commands, StmtX, BindX, BinderX, QueryX, DeclX};
 use air::context::{QueryContext, ValidityResult};
 use air::messages::{ArcDynMessage, Diagnostics};
 use air::profiler::Profiler;
 use rustc_errors::{DiagnosticBuilder, EmissionGuarantee};
 use rustc_hir::OwnerNode;
+use air::ast::ExprX;
 use rustc_interface::interface::Compiler;
 use vir::messages::{
     message, note, note_bare, Message, MessageLabel, MessageLevel, MessageX, ToAny,
@@ -410,47 +412,360 @@ impl Verifier {
     fn print_profile_stats(
         &self,
         diagnostics: &impl air::messages::Diagnostics,
-        profiler: Profiler,
+        profiler: QuantifierProfiler,
         qid_map: &HashMap<String, vir::sst::BndInfo>,
     ) {
-        let num_quants = profiler.quant_count();
-        let total = profiler.total_instantiations();
+        // let num_quants = profiler.quant_count();
+        // let total = profiler.total_instantiations();
         let max = 10;
-        let msg = format!(
-            "Observed {} total instantiations of user-level quantifiers",
-            total.to_formatted_string(&Locale::en)
-        );
-        diagnostics.report(&note_bare(&msg).to_any());
+        // let msg = format!(
+        //     "Observed {} total instantiations of user-level quantifiers",
+        //     total.to_formatted_string(&Locale::en)
+        // );
+        // diagnostics.report(&note_bare(&msg).to_any());
 
-        for (index, cost) in profiler.iter().take(max).enumerate() {
+        // for (index, cost) in profiler.iter().take(max).enumerate() {
+        //     // Report the quantifier
+        //     let count = cost.instantiations;
+        //     let note = format!(
+        //         "Cost * Instantiations: {} (Instantiated {} times - {}% of the total, cost {}) top {} of {} user-level quantifiers.\n",
+        //         count * cost.cost,
+        //         count.to_formatted_string(&Locale::en),
+        //         100 * count / total,
+        //         cost.cost,
+        //         index + 1,
+        //         num_quants
+        //     );
+        //     let bnd_info = qid_map
+        //         .get(&cost.quant)
+        //         .expect(format!("Failed to find quantifier {}", cost.quant).as_str());
+        //     let mut msg = note_bare(note);
+
+        //     // Summarize the triggers it used
+        //     let triggers = &bnd_info.trigs;
+        //     for trigger in triggers.iter() {
+        //         msg = trigger.iter().fold(msg, |m, e| m.primary_span(&e.span));
+        //     }
+        //     msg = msg.secondary_label(
+        //         &bnd_info.span,
+        //         "Triggers selected for this quantifier".to_string(),
+        //     );
+
+        //     diagnostics.report(&msg.to_any());
+        // }
+
+        // Report potential explicit instantiations to reduce SMT burden
+        // ZL TODO: refactor this
+        for (index, inst) in profiler.instantiations.iter().take(max).enumerate() {
             // Report the quantifier
-            let count = cost.instantiations;
-            let note = format!(
-                "Cost * Instantiations: {} (Instantiated {} times - {}% of the total, cost {}) top {} of {} user-level quantifiers.\n",
-                count * cost.cost,
-                count.to_formatted_string(&Locale::en),
-                100 * count / total,
-                cost.cost,
-                index + 1,
-                num_quants
-            );
             let bnd_info = qid_map
-                .get(&cost.quant)
-                .expect(format!("Failed to find quantifier {}", cost.quant).as_str());
-            let mut msg = note_bare(note);
+                .get(&inst.qid)
+                .expect(format!("Failed to find quantifier {}", inst.qid).as_str());
 
-            // Summarize the triggers it used
-            let triggers = &bnd_info.trigs;
-            for trigger in triggers.iter() {
-                msg = trigger.iter().fold(msg, |m, e| m.primary_span(&e.span));
-            }
+            // let Some(span) = self.spans.from_air_span(&bnd_info.span.raw_span, Some(self.source_map));
+            // let span = from_raw_span(&bnd_info.span.raw_span);
+
+            let mut msg = note_bare("Could use explicit quantifier instantiations to reduce SMT burden");
             msg = msg.secondary_label(
                 &bnd_info.span,
-                "Triggers selected for this quantifier".to_string(),
+                "Try instantiation: <todo>",
+                // format!("Try instantiation: ({})", inst.terms.connect(", ")),
             );
-
             diagnostics.report(&msg.to_any());
+
+            // let mut multi = MultiSpan::from_span(span);
+            // multi.push_span_label(span, "Quantifier introduced to context here".to_string());
+            // diagnostics.span_note_without_error(span, &msg);
+            // diagnostics.note_without_error(&format!("Try instantiation: ({})", inst.terms.connect(", ")));
         }
+    }
+
+    // TODO: variable capturing
+    fn substitute_expr(&self, substitution: &HashMap<String, &air::ast::Expr>, expr: &air::ast::Expr) -> air::ast::Expr {
+        match expr.as_ref() {
+            ExprX::Var(id) => {
+                if let Some(&substitute) = substitution.get(id.as_ref()) {
+                    substitute.clone()
+                } else {
+                    expr.clone()
+                }
+            },
+
+            ExprX::Const(_) | ExprX::Old(_, _) => expr.clone(),
+
+            ExprX::Apply(id, exprs) =>
+                Arc::new(ExprX::Apply(id.clone(), self.substitute_exprs(substitution, exprs))),
+
+            ExprX::ApplyLambda(typ, expr, exprs) =>
+                Arc::new(ExprX::ApplyLambda(typ.clone(), self.substitute_expr(substitution, expr), self.substitute_exprs(substitution, exprs))),
+
+            ExprX::Unary(op, expr) =>
+                Arc::new(ExprX::Unary(op.clone(), self.substitute_expr(substitution, expr))),
+
+            ExprX::Binary(op, expr1, expr2) =>
+                Arc::new(ExprX::Binary(op.clone(), self.substitute_expr(substitution, expr1), self.substitute_expr(substitution, expr2))),
+
+            ExprX::Multi(op, exprs) =>
+                Arc::new(ExprX::Multi(op.clone(), self.substitute_exprs(substitution, exprs))),
+
+            ExprX::IfElse(expr1, expr2, expr3) =>
+                Arc::new(ExprX::IfElse(
+                    self.substitute_expr(substitution, expr1),
+                    self.substitute_expr(substitution, expr2),
+                    self.substitute_expr(substitution, expr3),
+                )),
+
+            ExprX::LabeledAxiom(label, expr) =>
+                Arc::new(ExprX::LabeledAxiom(label.clone(), self.substitute_expr(substitution, expr))),
+
+            ExprX::LabeledAssertion(err, expr) =>
+                Arc::new(ExprX::LabeledAssertion(err.clone(), self.substitute_expr(substitution, expr))),
+
+            ExprX::Bind(bind, expr) => {
+                let mut shadowed_substitution = substitution.clone();
+
+                let new_bind = match bind.as_ref() {
+                    BindX::Let(binders) => {
+                        let new_binders = binders
+                            .iter()
+                            .map(|binder|
+                                Arc::new(BinderX { name: binder.name.clone(), a: self.substitute_expr(substitution, &binder.a) })
+                            )
+                            .collect::<Vec<_>>();
+
+                        for binder in binders.iter() {
+                            shadowed_substitution.remove(binder.name.as_ref());
+                        }
+
+                        Arc::new(BindX::Let(Arc::new(new_binders)))
+                    },
+
+                    BindX::Lambda(binders, _, _) => {
+                        for binder in binders.iter() {
+                            shadowed_substitution.remove(binder.name.as_ref());
+                        }
+                        bind.clone()
+                    },
+
+                    // TODO: what is the SMT encoding of this?
+                    BindX::Choose(binders, triggers, qid, expr) => {
+                        for binder in binders.iter() {
+                            shadowed_substitution.remove(binder.name.as_ref());
+                        }
+
+                        Arc::new(BindX::Choose(
+                            binders.clone(),
+                            triggers.clone(),
+                            qid.clone(),
+                            self.substitute_expr(substitution, expr),
+                        ))
+                    },
+
+                    BindX::Quant(quant, binders, triggers, qid) => {
+                        for binder in binders.iter() {
+                            shadowed_substitution.remove(binder.name.as_ref());
+                        }
+
+                        bind.clone()
+                    },
+                };
+                let new_body = self.substitute_expr(&shadowed_substitution, expr);
+                Arc::new(ExprX::Bind(new_bind, new_body))
+            }
+        }
+    }
+
+    // Same as above but for Exprs
+    fn substitute_exprs(&self, substitution: &HashMap<String, &air::ast::Expr>, exprs: &air::ast::Exprs) -> air::ast::Exprs {
+        Arc::new(exprs.iter().map(|expr| self.substitute_expr(substitution, expr)).collect())
+    }
+
+    // Replace universally quantified formulas in expr with instantiations specified in instantiations
+    fn instantiate_expr(&self, instantiations: &HashMap<String, Vec<Arc<Instantiation>>>, expr: &air::ast::Expr) -> air::ast::Expr {
+        match expr.as_ref() {
+            ExprX::Const(_) | ExprX::Var(_) | ExprX::Old(_, _) => expr.clone(),
+
+            ExprX::Apply(id, exprs) =>
+                Arc::new(ExprX::Apply(id.clone(), self.instantiate_exprs(instantiations, exprs))),
+
+            ExprX::ApplyLambda(typ, expr, exprs) =>
+                Arc::new(ExprX::ApplyLambda(typ.clone(), self.instantiate_expr(instantiations, expr), self.instantiate_exprs(instantiations, exprs))),
+
+            ExprX::Unary(op, expr) =>
+                Arc::new(ExprX::Unary(op.clone(), self.instantiate_expr(instantiations, expr))),
+
+            ExprX::Binary(op, expr1, expr2) =>
+                Arc::new(ExprX::Binary(op.clone(), self.instantiate_expr(instantiations, expr1), self.instantiate_expr(instantiations, expr2))),
+
+            ExprX::Multi(op, exprs) =>
+                Arc::new(ExprX::Multi(op.clone(), self.instantiate_exprs(instantiations, exprs))),
+
+            ExprX::IfElse(expr1, expr2, expr3) =>
+                Arc::new(ExprX::IfElse(
+                    self.instantiate_expr(instantiations, expr1),
+                    self.instantiate_expr(instantiations, expr2),
+                    self.instantiate_expr(instantiations, expr3),
+                )),
+
+            ExprX::LabeledAxiom(label, expr) =>
+                Arc::new(ExprX::LabeledAxiom(label.clone(), self.instantiate_expr(instantiations, expr))),
+
+            ExprX::LabeledAssertion(err, expr) =>
+                Arc::new(ExprX::LabeledAssertion(err.clone(), self.instantiate_expr(instantiations, expr))),
+
+            ExprX::Bind(bind, body) => {
+                let mut new_body = self.instantiate_expr(instantiations, body);
+
+                match bind.as_ref() {
+                    BindX::Let(binders) => {
+                        let new_binders = binders
+                            .iter()
+                            .map(|binder|
+                                Arc::new(BinderX { name: binder.name.clone(), a: self.instantiate_expr(instantiations, &binder.a) })
+                            )
+                            .collect::<Vec<_>>();
+
+                        let new_bind = Arc::new(BindX::Let(Arc::new(new_binders)));
+
+                        Arc::new(ExprX::Bind(new_bind, new_body))
+                    },
+
+                    BindX::Lambda(_, _, _) => Arc::new(ExprX::Bind(bind.clone(), new_body)),
+
+                    // TODO: what is the SMT encoding of this?
+                    BindX::Choose(binders, triggers, qid, expr) => {
+                        let new_bind = Arc::new(BindX::Choose(
+                            binders.clone(),
+                            triggers.clone(),
+                            qid.clone(),
+                            self.instantiate_expr(instantiations, expr),
+                        ));
+
+                        Arc::new(ExprX::Bind(new_bind, new_body))
+                    },
+
+                    // If there is no QID, we just ignore this quantifier
+                    BindX::Quant(quant, binders, triggers, None) =>
+                        Arc::new(ExprX::Bind(bind.clone(), new_body)),
+
+                    BindX::Quant(quant, binders, triggers, Some(qid)) => {
+                        if let Some(instantiations) = instantiations.get(qid.as_ref()) {
+                            let mut substituted_exprs = Vec::new();
+
+                            for instantiation in instantiations {
+                                assert!(instantiation.terms.len() == binders.len());
+
+                                let mut substitution = HashMap::new();
+                                for (binder, term) in binders.iter().zip(instantiation.terms.iter()) {
+                                    substitution.insert(binder.name.to_string(), term);
+                                }
+
+                                let substituted_expr = self.substitute_expr(&substitution, &new_body);
+                                substituted_exprs.push(substituted_expr);
+                            }
+
+                            Arc::new(ExprX::Multi(air::ast::MultiOp::And, Arc::new(substituted_exprs)))
+                        } else {
+                            Arc::new(ExprX::Bind(bind.clone(), new_body))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Same as above but for Exprs
+    fn instantiate_exprs(&self, instantiations: &HashMap<String, Vec<Arc<Instantiation>>>, exprs: &air::ast::Exprs) -> air::ast::Exprs {
+        Arc::new(exprs.iter().map(|expr| self.instantiate_expr(instantiations, expr)).collect())
+    }
+
+    fn instantiate_query_helper(
+        &self,
+        instantiations: &HashMap<String, Vec<Arc<Instantiation>>>,
+        new_stmts: &mut Vec<air::ast::Stmt>,
+        new_axioms: &mut Vec<air::ast::Decl>,
+        stmts: &air::ast::Stmts,
+    ) {
+        for stmt in stmts.iter() {
+            match stmt.as_ref() {
+                // If we have a assume statement starting with a universal quantifier
+                // look up the corresponding QID in the instantiation map
+                // If found, replace it with instantiations
+                StmtX::Assume(expr) => {
+                    if let ExprX::Bind(bind, body) = expr.as_ref() {
+                        if let BindX::Quant(
+                            air::ast::Quant::Forall,
+                            binders,
+                            triggers,
+                            Some(qid),
+                        ) = bind.as_ref() {
+                            if let Some(instantiations) = instantiations.get(qid.as_ref()) {
+                                for instantiation in instantiations {
+                                    assert!(instantiation.terms.len() == binders.len());
+
+                                    let mut substitution = HashMap::new();
+                                    for (binder, term) in binders.iter().zip(instantiation.terms.iter()) {
+                                        substitution.insert(binder.name.to_string(), term);
+                                    }
+
+                                    let substituted_expr = self.substitute_expr(&substitution, &body);
+                                    new_axioms.push(Arc::new(DeclX::Axiom(
+                                        Arc::new(ExprX::Apply(
+                                            // A hack to ask AIR to name these instances
+                                            Arc::new("!".to_string()),
+                                            Arc::new(vec![
+                                                substituted_expr,
+                                                Arc::new(ExprX::Var(Arc::new(":named".to_string()))),
+                                                // ZL TODO: add a def for this constant
+                                                Arc::new(ExprX::Var(Arc::new("named-instance-".to_string() + &instantiation.index.to_string()))),
+                                            ])
+                                        ))
+                                    )));
+                                }
+
+                                continue;
+                            } // TODO: should we still keep the quantifiers in this case?
+
+                            // new_axioms.push(Arc::new(DeclX::Axiom(self.instantiate_expr(instantiations, expr))));
+                        }
+                    }
+
+                    new_stmts.push(stmt.clone());
+                },
+
+                StmtX::Block(stmts) => self.instantiate_query_helper(instantiations, new_stmts, new_axioms, stmts),
+
+                StmtX::Assert(span, expr) => new_stmts.push(stmt.clone()),
+
+                // TODO: what do these do?
+                StmtX::Havoc(_) => new_stmts.push(stmt.clone()),
+                StmtX::Snapshot(_) => new_stmts.push(stmt.clone()),
+                StmtX::DeadEnd(_) => new_stmts.push(stmt.clone()),
+                StmtX::Switch(_) => new_stmts.push(stmt.clone()),
+                StmtX::Assign(_, _) => new_stmts.push(stmt.clone()),
+            }
+        }
+    }
+
+    // Same as above but for Stmt and only instantiates Assume statements
+    // and the instantiated Assume statements are converted into Axioms for convenience
+    fn instantiate_query(&self, instantiations: &HashMap<String, Vec<Arc<Instantiation>>>, query: &air::ast::Query)
+    -> air::ast::Query {
+
+        let stmts = match query.assertion.as_ref() {
+            StmtX::Block(stmts) => stmts,
+            _ => return query.clone(), // nothing to change
+        };
+
+        let mut new_stmts = Vec::new();
+        let mut new_axioms = Vec::new();
+
+        self.instantiate_query_helper(instantiations, &mut new_stmts, &mut new_axioms, stmts);
+
+        Arc::new(QueryX {
+            local: Arc::new(query.local.iter().cloned().chain(new_axioms.iter().cloned()).collect()),
+            assertion: Arc::new(StmtX::Block(Arc::new(new_stmts))),
+        })
     }
 
     /// Check the result of a query that was based on user input.
@@ -469,6 +784,7 @@ impl Verifier {
         command: &Command,
         context: &(&vir::messages::Span, &str),
         is_singular: bool,
+        no_pop: bool, // ZL TODO: hacky
     ) -> bool {
         let message_interface = Arc::new(vir::messages::VirMessageInterface {});
 
@@ -541,10 +857,10 @@ impl Verifier {
                         msg.push_str("; consider rerunning with --profile for more details");
                     }
                     reporter.report(&message(level, msg, &context.0).to_any());
-                    if self.args.profile {
-                        let profiler = Profiler::new(message_interface, reporter);
-                        self.print_profile_stats(reporter, profiler, qid_map);
-                    }
+                    // if self.args.profile {
+                    //     let profiler = Profiler::new(message_interface, reporter);
+                    //     self.print_profile_stats(reporter, profiler, qid_map);
+                    // }
                     break;
                 }
                 ValidityResult::Invalid(air_model, error) => {
@@ -622,7 +938,7 @@ impl Verifier {
             reporter.report(&note(context.0, msg).to_any());
         }
 
-        if is_check_valid && !is_singular {
+        if is_check_valid && !is_singular && !no_pop {
             air_context.finish_query();
         }
 
@@ -671,6 +987,7 @@ impl Verifier {
         function_name: &Fun,
         comment: &str,
         desc_prefix: Option<&str>,
+        no_pop: bool,
     ) -> bool {
         let user_filter = self.user_filter.as_ref().unwrap();
         let includes_function = user_filter.includes_function(function_name);
@@ -700,6 +1017,7 @@ impl Verifier {
                 &command,
                 &(span, &desc),
                 *prover_choice == vir::def::ProverChoice::Singular,
+                no_pop,
             );
             invalidity = invalidity || result_invalidity;
         }
@@ -884,6 +1202,7 @@ impl Verifier {
         source_map: Option<&SourceMap>,
         bucket_id: &BucketId,
         ctx: &mut vir::context::Ctx,
+        quant_profiler: &mut QuantifierProfiler,
     ) -> Result<(Duration, Duration), VirErr> {
         let message_interface = Arc::new(vir::messages::VirMessageInterface {});
 
@@ -1085,6 +1404,7 @@ impl Verifier {
                     &function.x.name,
                     &("Function-Termination ".to_string() + &fun_as_friendly_rust_name(f)),
                     Some("function termination: "),
+                    false,
                 );
                 let check_recommends = function.x.attrs.check_recommends;
                 if (invalidity && !self.args.no_auto_recommends_check) || check_recommends {
@@ -1117,6 +1437,7 @@ impl Verifier {
                             &function.x.name,
                             &(s.to_string() + &fun_as_friendly_rust_name(&function.x.name)),
                             Some("recommends check: "),
+                            false,
                         );
                     }
                 }
@@ -1234,6 +1555,9 @@ impl Verifier {
                         &mut air_context
                     };
                     let desc_prefix = recommends_rerun.then(|| "recommends check: ");
+                    
+                    println!("\ncommands {:?} {:?}\n", function.x.name.path, command.commands);
+
                     let command_invalidity = self.run_commands_queries(
                         reporter,
                         source_map,
@@ -1247,12 +1571,92 @@ impl Verifier {
                         &function.x.name,
                         &(s.to_string() + &fun_as_friendly_rust_name(&function.x.name)),
                         desc_prefix,
+                        false,
                     );
                     if do_spinoff {
                         let (time_smt_init, time_smt_run) = query_air_context.get_time();
                         spunoff_time_smt_init += time_smt_init;
                         spunoff_time_smt_run += time_smt_run;
                     }
+
+                    // ZL TODO: Gather more profiling information about the QI
+                    // by running the command again with explicit instantiations
+                    let new_instantiations = quant_profiler.process_function(&function.x.name.path);
+                    let mut organized_instantiations = HashMap::new();
+
+                    for new_instantiation in new_instantiations {
+                        if !organized_instantiations.contains_key(&new_instantiation.qid) {
+                            organized_instantiations.insert(new_instantiation.qid.to_string(), Vec::new());
+                        }
+
+                        organized_instantiations.get_mut(&new_instantiation.qid).expect("").push(new_instantiation.clone());
+
+                        // println!("found new instantiation {:?}", new_instantiation.clone());
+                    }
+
+                    let instantiated_command = Arc::new(CommandsWithContextX {
+                        span: command.span.clone(),
+                        desc: command.desc.clone(),
+                        commands: Arc::new(command.commands.iter()
+                            .map(|cmd| match cmd.as_ref() {
+                                CommandX::CheckValid(query) =>
+                                    Arc::new(CommandX::CheckValid(self.instantiate_query(&organized_instantiations, query))),
+
+                                _ => cmd.clone(),
+                            })
+                            .collect()),
+                        prover_choice: command.prover_choice,
+                        skip_recommends: command.skip_recommends,
+                    });
+                    println!("\ninstantiated commands {:?} {:?}\n", function.x.name.path, instantiated_command.commands);
+
+                    let instantiated_command_invalidity = self.run_commands_queries(
+                        reporter,
+                        source_map,
+                        MessageLevel::Error,
+                        query_air_context,
+                        instantiated_command.clone(),
+                        &HashMap::new(),
+                        &snap_map,
+                        &ctx.global.qid_map.borrow(),
+                        bucket_id,
+                        &function.x.name,
+                        &(s.to_string() + &fun_as_friendly_rust_name(&function.x.name) + " (QI profiler)"),
+                        desc_prefix,
+                        true, // pop later! (very hacky)
+                    );
+                    println!("instantiated commands invalidity: {} {}", instantiated_command_invalidity, command_invalidity);
+
+                    if instantiated_command_invalidity != command_invalidity {
+                        panic!("unexpected QI profiler result");
+                    }
+
+                    // Query the prover for unsat core
+                    let result = query_air_context.command(
+                        &*message_interface,
+                        reporter,
+                        &Arc::new(CommandX::GetUnsatCore),
+                        Default::default(),
+                    );
+                    match result {
+                        ValidityResult::UnexpectedOutput(unsat_core_string) => {
+                            println!("unsat core: {}", unsat_core_string);
+
+                            for instance_name in unsat_core_string.split(' ') {
+                                if instance_name.starts_with("named-instance-") {
+                                    let instance_index = instance_name.chars().skip("named-instance-".len()).collect::<String>().parse::<usize>().unwrap();
+                                    quant_profiler.mark_instance_used(instance_index);
+                                    println!("instance {} is used", instance_index);
+                                }
+                            }
+                        },
+
+                        _ => {
+                            println!("failed to get unsat core: {:?}", result);
+                        }
+                    }
+
+                    query_air_context.finish_query();
 
                     function_invalidity = function_invalidity || command_invalidity;
                 }
@@ -1281,6 +1685,7 @@ impl Verifier {
         source_map: Option<&SourceMap>,
         bucket_id: &BucketId,
         mut global_ctx: vir::context::GlobalCtx,
+        quant_profiler: &mut QuantifierProfiler,
     ) -> Result<vir::context::GlobalCtx, VirErr> {
         let time_verify_start = Instant::now();
 
@@ -1319,7 +1724,7 @@ impl Verifier {
         }
 
         let (time_smt_init, time_smt_run) =
-            self.verify_bucket(reporter, &poly_krate, source_map, bucket_id, &mut ctx)?;
+            self.verify_bucket(reporter, &poly_krate, source_map, bucket_id, &mut ctx, quant_profiler)?;
 
         global_ctx = ctx.free();
 
@@ -1376,6 +1781,8 @@ impl Verifier {
             vir::printer::write_krate(&mut file, &krate, &self.args.vir_log_option);
         }
 
+        let mut quant_profiler = QuantifierProfiler::new();
+
         #[cfg(debug_assertions)]
         vir::check_ast_flavor::check_krate_simplified(&krate);
 
@@ -1425,180 +1832,182 @@ impl Verifier {
 
         self.num_threads = std::cmp::min(self.args.num_threads, bucket_ids.len());
         if self.num_threads > 1 {
-            // create the multiple producers, single consumer queue
-            let (sender, receiver) = std::sync::mpsc::channel();
+            panic!("threading disabled");
+        //     // create the multiple producers, single consumer queue
+        //     let (sender, receiver) = std::sync::mpsc::channel();
 
-            // collect the buckets and create the task queueu
-            let mut tasks = VecDeque::with_capacity(bucket_ids.len());
-            let mut messages: Vec<(bool, Vec<(Message, MessageLevel)>)> = Vec::new();
-            for (i, bucket_id) in bucket_ids.iter().enumerate() {
-                // give each bucket its own log file
-                let interpreter_log_file = Arc::new(std::sync::Mutex::new(
-                    if self.args.log_all || self.args.log_vir_simple {
-                        Some(self.create_log_file(
-                            Some(bucket_id),
-                            crate::config::INTERPRETER_FILE_SUFFIX,
-                        )?)
-                    } else {
-                        None
-                    },
-                ));
+        //     // collect the buckets and create the task queueu
+        //     let mut tasks = VecDeque::with_capacity(bucket_ids.len());
+        //     let mut messages: Vec<(bool, Vec<(Message, MessageLevel)>)> = Vec::new();
+        //     for (i, bucket_id) in bucket_ids.iter().enumerate() {
+        //         // give each bucket its own log file
+        //         let interpreter_log_file = Arc::new(std::sync::Mutex::new(
+        //             if self.args.log_all || self.args.log_vir_simple {
+        //                 Some(self.create_log_file(
+        //                     Some(bucket_id),
+        //                     crate::config::INTERPRETER_FILE_SUFFIX,
+        //                 )?)
+        //             } else {
+        //                 None
+        //             },
+        //         ));
 
-                // give each task a queued reporter to identify the bucket that is sending messages
-                let reporter = QueuedReporter::new(i, sender.clone());
+        //         // give each task a queued reporter to identify the bucket that is sending messages
+        //         let reporter = QueuedReporter::new(i, sender.clone());
 
-                tasks.push_back((
-                    bucket_id.clone(),
-                    global_ctx.from_self_with_log(interpreter_log_file),
-                    reporter,
-                ));
-                messages.push((false, Vec::new()));
-            }
+        //         tasks.push_back((
+        //             bucket_id.clone(),
+        //             global_ctx.from_self_with_log(interpreter_log_file),
+        //             reporter,
+        //         ));
+        //         messages.push((false, Vec::new()));
+        //     }
 
-            // protect the taskq with a mutex
-            let taskq = std::sync::Arc::new(std::sync::Mutex::new(tasks));
+        //     // protect the taskq with a mutex
+        //     let taskq = std::sync::Arc::new(std::sync::Mutex::new(tasks));
 
-            // create the worker threads
-            let mut workers = Vec::new();
-            for _tid in 0..self.num_threads {
-                // we create a clone of the verifier here to pass each thread its own local
-                // copy as we modify fields in the verifier struct. later, we merge the results
-                let mut thread_verifier = self.from_self();
-                let thread_taskq = taskq.clone();
-                let thread_krate = krate.clone(); // is an Arc<T>
+        //     // create the worker threads
+        //     let mut workers = Vec::new();
+        //     for _tid in 0..self.num_threads {
+        //         // we create a clone of the verifier here to pass each thread its own local
+        //         // copy as we modify fields in the verifier struct. later, we merge the results
+        //         let mut thread_verifier = self.from_self();
+        //         let thread_taskq = taskq.clone();
+        //         let thread_krate = krate.clone(); // is an Arc<T>
 
-                let worker = std::thread::spawn(move || {
-                    let mut completed_tasks: Vec<GlobalCtx> = Vec::new();
-                    loop {
-                        let mut tq = thread_taskq.lock().unwrap();
-                        let elm = tq.pop_front();
-                        drop(tq);
-                        if let Some((bucket_id, task, reporter)) = elm {
-                            let res = thread_verifier.verify_bucket_outer(
-                                &reporter,
-                                &thread_krate,
-                                None,
-                                &bucket_id,
-                                task,
-                            );
-                            reporter.done(); // we've verified the bucket, send the done message
-                            match res {
-                                Ok(res) => {
-                                    completed_tasks.push(res);
-                                }
-                                Err(e) => return Err(e),
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-                    Ok::<(Verifier, Vec<GlobalCtx>), VirErr>((thread_verifier, completed_tasks))
-                });
-                workers.push(worker);
-            }
+        //         let worker = std::thread::spawn(move || {
+        //             let mut completed_tasks: Vec<GlobalCtx> = Vec::new();
+        //             loop {
+        //                 let mut tq = thread_taskq.lock().unwrap();
+        //                 let elm = tq.pop_front();
+        //                 drop(tq);
+        //                 if let Some((bucket_id, task, reporter)) = elm {
+        //                     let res = thread_verifier.verify_bucket_outer(
+        //                         &reporter,
+        //                         &thread_krate,
+        //                         None,
+        //                         &bucket_id,
+        //                         task,
+        //                         &mut quant_profiler,
+        //                     );
+        //                     reporter.done(); // we've verified the bucket, send the done message
+        //                     match res {
+        //                         Ok(res) => {
+        //                             completed_tasks.push(res);
+        //                         }
+        //                         Err(e) => return Err(e),
+        //                     }
+        //                 } else {
+        //                     break;
+        //                 }
+        //             }
+        //             Ok::<(Verifier, Vec<GlobalCtx>), VirErr>((thread_verifier, completed_tasks))
+        //         });
+        //         workers.push(worker);
+        //     }
 
-            // start handling messages, we keep track of the current active bucket for which we
-            // print messages immediately, while buffering other messages from the other buckets
-            let mut active_bucket = None;
-            let mut num_done = 0;
-            let reporter = Reporter::new(spans, compiler);
-            loop {
-                let msg = receiver.recv().expect("receiving message failed");
-                match msg {
-                    ReporterMessage::Message(id, msg, level, now) => {
-                        if now {
-                            // if the message should be reported immediately, do so
-                            // this is used for printing notices for long running queries
-                            reporter.report_as(&msg.to_any(), level);
-                            continue;
-                        }
+        //     // start handling messages, we keep track of the current active bucket for which we
+        //     // print messages immediately, while buffering other messages from the other buckets
+        //     let mut active_bucket = None;
+        //     let mut num_done = 0;
+        //     let reporter = Reporter::new(spans, compiler);
+        //     loop {
+        //         let msg = receiver.recv().expect("receiving message failed");
+        //         match msg {
+        //             ReporterMessage::Message(id, msg, level, now) => {
+        //                 if now {
+        //                     // if the message should be reported immediately, do so
+        //                     // this is used for printing notices for long running queries
+        //                     reporter.report_as(&msg.to_any(), level);
+        //                     continue;
+        //                 }
 
-                        if let Some(m) = active_bucket {
-                            // if it's the active bucket, print the message
-                            if id == m {
-                                reporter.report_as(&msg.to_any(), level);
-                            } else {
-                                let msgs = messages.get_mut(id).expect("message id out of range");
-                                msgs.1.push((msg, level));
-                            }
-                        } else {
-                            // no active bucket, print this message and set the bucket as the
-                            // active one
-                            active_bucket = Some(id);
-                            reporter.report_as(&msg.to_any(), level);
-                        }
-                    }
-                    ReporterMessage::Done(id) => {
-                        // the done message is sent by the thread whenever it is done with verifying
-                        // a bucket, we mark the bucket as done here.
-                        {
-                            // record that the bucket is done
-                            let msgs = messages.get_mut(id).expect("message id out of range");
-                            msgs.0 = true;
-                        }
+        //                 if let Some(m) = active_bucket {
+        //                     // if it's the active bucket, print the message
+        //                     if id == m {
+        //                         reporter.report_as(&msg.to_any(), level);
+        //                     } else {
+        //                         let msgs = messages.get_mut(id).expect("message id out of range");
+        //                         msgs.1.push((msg, level));
+        //                     }
+        //                 } else {
+        //                     // no active bucket, print this message and set the bucket as the
+        //                     // active one
+        //                     active_bucket = Some(id);
+        //                     reporter.report_as(&msg.to_any(), level);
+        //                 }
+        //             }
+        //             ReporterMessage::Done(id) => {
+        //                 // the done message is sent by the thread whenever it is done with verifying
+        //                 // a bucket, we mark the bucket as done here.
+        //                 {
+        //                     // record that the bucket is done
+        //                     let msgs = messages.get_mut(id).expect("message id out of range");
+        //                     msgs.0 = true;
+        //                 }
 
-                        // if it is the active bucket, mark it as done, and reset the active bucket
-                        if let Some(m) = active_bucket {
-                            if m == id {
-                                assert!(
-                                    messages
-                                        .get_mut(id)
-                                        .expect("message id out of range")
-                                        .1
-                                        .is_empty()
-                                );
-                                active_bucket = None;
-                            }
-                        }
+        //                 // if it is the active bucket, mark it as done, and reset the active bucket
+        //                 if let Some(m) = active_bucket {
+        //                     if m == id {
+        //                         assert!(
+        //                             messages
+        //                                 .get_mut(id)
+        //                                 .expect("message id out of range")
+        //                                 .1
+        //                                 .is_empty()
+        //                         );
+        //                         active_bucket = None;
+        //                     }
+        //                 }
 
-                        // try to pick a new active bucket here, the first one that has any messages
-                        if active_bucket.is_none() {
-                            for (i, msgs) in messages.iter_mut().enumerate() {
-                                if msgs.1.is_empty() {
-                                    continue;
-                                }
-                                // drain and print all messages of the bucket
-                                for (msg, level) in msgs.1.drain(..) {
-                                    reporter.report_as(&msg.to_any(), level);
-                                }
-                                // if the bucket wasn't done, make it active and handle next message
-                                if !msgs.0 {
-                                    active_bucket = Some(i);
-                                    break;
-                                }
-                            }
-                        }
+        //                 // try to pick a new active bucket here, the first one that has any messages
+        //                 if active_bucket.is_none() {
+        //                     for (i, msgs) in messages.iter_mut().enumerate() {
+        //                         if msgs.1.is_empty() {
+        //                             continue;
+        //                         }
+        //                         // drain and print all messages of the bucket
+        //                         for (msg, level) in msgs.1.drain(..) {
+        //                             reporter.report_as(&msg.to_any(), level);
+        //                         }
+        //                         // if the bucket wasn't done, make it active and handle next message
+        //                         if !msgs.0 {
+        //                             active_bucket = Some(i);
+        //                             break;
+        //                         }
+        //                     }
+        //                 }
 
-                        num_done = num_done + 1;
-                    }
-                }
+        //                 num_done = num_done + 1;
+        //             }
+        //         }
 
-                if num_done == bucket_ids.len() {
-                    break;
-                }
-            }
+        //         if num_done == bucket_ids.len() {
+        //             break;
+        //         }
+        //     }
 
-            // join with all worker threads, theys should all have exited by now.
-            // merge the verifier and global contexts
-            for worker in workers {
-                let res = worker.join().unwrap();
-                match res {
-                    Ok((verifier, res)) => {
-                        for r in res {
-                            global_ctx.merge(r);
-                        }
-                        self.merge(verifier);
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
+        //     // join with all worker threads, theys should all have exited by now.
+        //     // merge the verifier and global contexts
+        //     for worker in workers {
+        //         let res = worker.join().unwrap();
+        //         match res {
+        //             Ok((verifier, res)) => {
+        //                 for r in res {
+        //                     global_ctx.merge(r);
+        //                 }
+        //                 self.merge(verifier);
+        //             }
+        //             Err(e) => return Err(e),
+        //         }
+        //     }
 
-            // print remaining messages
-            for msgs in messages.drain(..) {
-                for (msg, level) in msgs.1 {
-                    reporter.report_as(&msg.to_any(), level);
-                }
-            }
+        //     // print remaining messages
+        //     for msgs in messages.drain(..) {
+        //         for (msg, level) in msgs.1 {
+        //             reporter.report_as(&msg.to_any(), level);
+        //         }
+        //     }
         } else {
             for bucket_id in &bucket_ids {
                 global_ctx = self.verify_bucket_outer(
@@ -1607,14 +2016,16 @@ impl Verifier {
                     Some(source_map),
                     bucket_id,
                     global_ctx,
+                    &mut quant_profiler,
                 )?;
             }
         }
 
         if self.args.profile_all {
-            let profiler =
-                Profiler::new(Arc::new(vir::messages::VirMessageInterface {}), &reporter);
-            self.print_profile_stats(&reporter, profiler, &global_ctx.qid_map.borrow());
+            // let profiler =
+            //     Profiler::new(Arc::new(vir::messages::VirMessageInterface {}), &reporter);
+            // self.print_profile_stats(&reporter, profiler, &global_ctx.qid_map.borrow());
+            self.print_profile_stats(&reporter, quant_profiler, &global_ctx.qid_map.borrow());
         } else if self.args.profile && self.count_errors == 0 {
             let msg = note_bare(
                 "--profile reports prover performance data only when rlimts are exceeded, use --profile-all to always report profiler results",

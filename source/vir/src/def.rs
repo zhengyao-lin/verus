@@ -505,11 +505,13 @@ pub fn name_as_vstd_name(name: &String) -> Option<String> {
 }
 
 // Generate a unique quantifier name
-pub fn new_user_qid_name(fun_name: &str, q_count: u64) -> String {
+pub fn new_user_qid_name(fun_name: &str, q_count: u64, is_qi_inst_target: bool) -> String {
     // In SMTLIB, unquoted attribute values cannot contain colons,
     // and sise cannot handle quoting with vertical bars
     let fun_name = str::replace(&fun_name, ":", "_");
-    let qid = format!("{}{}_{}", air::profiler::USER_QUANT_PREFIX, fun_name, q_count);
+    // let qid = format!("{}{}_{}", air::profiler::USER_QUANT_PREFIX, fun_name, q_count);
+    let prefix = if is_qi_inst_target { air::profiler::INST_TARGET_QUANT_PREFIX } else { air::profiler::USER_QUANT_PREFIX };
+    let qid = format!("{}{}_{}", prefix, fun_name, q_count);
     qid
 }
 

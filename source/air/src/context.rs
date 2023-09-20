@@ -237,6 +237,9 @@ impl Context {
             self.set_z3_param_bool("smt.delay_units", true, true);
             self.set_z3_param_u32("smt.arith.solver", 2, true);
             self.set_z3_param_bool("smt.arith.nl", false, true);
+
+            // ZL TODO: use the profile flag
+            self.set_z3_param_bool("produce-unsat-cores", true, true);
         } else if option == "disable_incremental_solving" && value {
             self.disable_incremental_solving = true;
             if write_to_logs {
@@ -311,11 +314,12 @@ impl Context {
         match self.state {
             ContextState::NotStarted => {
                 if self.profile || self.profile_all {
-                    self.set_z3_param("trace", "true");
+                    // self.set_z3_param("trace", "true");
                     // Very expensive.  May be needed to support more detailed log analysis.
                     //self.set_z3_param("proof", "true");
-                    self.log_set_z3_param("trace_file_name", profiler::PROVER_LOG_FILE);
                 }
+                self.set_z3_param("trace", "true");
+                self.log_set_z3_param("trace_file_name", profiler::PROVER_LOG_FILE);
                 self.blank_line();
                 self.comment("AIR prelude");
                 self.smt_log.log_node(&node!((declare-sort {str_to_node(crate::def::FUNCTION)} 0)));
@@ -418,13 +422,13 @@ impl Context {
     }
 
     pub fn finish_query(&mut self) {
-        if self.disable_incremental_solving {
-            self.state = ContextState::NoMoreQueriesAllowed;
-        } else {
-            self.pop_name_scope();
-            self.smt_log.log_pop();
-            self.state = ContextState::ReadyForQuery;
-        }
+        // if self.disable_incremental_solving {
+        //     self.state = ContextState::NoMoreQueriesAllowed;
+        // } else {
+        self.pop_name_scope();
+        self.smt_log.log_pop();
+        self.state = ContextState::ReadyForQuery;
+        // }
     }
 
     pub fn eval_expr(&mut self, expr: sise::Node) -> String {
@@ -466,6 +470,21 @@ impl Context {
             }
             CommandX::CheckValid(query) => {
                 self.check_valid(message_interface, diagnostics, &query, query_context)
+            }
+            CommandX::GetUnsatCore => {
+                self.smt_log.log_word("get-unsat-core");
+                let smt_data = self.smt_log.take_pipe_data();
+                let smt_output = self.get_smt_process().send_commands(smt_data);
+
+                if smt_output.len() != 1 ||
+                   smt_output[0].starts_with("(error ") ||
+                   !smt_output[0].starts_with("(") ||
+                   !smt_output[0].ends_with(")") {
+                    ValidityResult::TypeError(smt_output.join("\n"))
+                } else {
+                    // ZL TODO: change UnexpectedOutput to something that makes more sense
+                    ValidityResult::UnexpectedOutput(smt_output[0].chars().skip(1).take(smt_output[0].len() - 2).collect())
+                }
             }
         }
     }

@@ -88,6 +88,7 @@ pub struct Ctx {
     pub debug: bool,
     pub expand_flag: bool,
     pub debug_expand_targets: Vec<crate::messages::Message>,
+    pub is_qi_inst_target: Cell<bool>,
 }
 
 impl Ctx {
@@ -333,6 +334,7 @@ impl Ctx {
             debug,
             expand_flag: false,
             debug_expand_targets: vec![],
+            is_qi_inst_target: Cell::new(false),
         })
     }
 

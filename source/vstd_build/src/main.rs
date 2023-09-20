@@ -83,6 +83,7 @@ fn main() {
         "erasure_macro_todo".to_string(),
         "--crate-type=lib".to_string(),
         "--out-dir".to_string(),
+        // "--profile".to_string(),
         verus_target_path.to_str().expect("invalid path").to_string(),
     ];
     if release {
