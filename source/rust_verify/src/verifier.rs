@@ -462,16 +462,19 @@ impl Verifier {
                 .get(&inst.qid)
                 .expect(format!("Failed to find quantifier {}", inst.qid).as_str());
 
-            // let Some(span) = self.spans.from_air_span(&bnd_info.span.raw_span, Some(self.source_map));
-            // let span = from_raw_span(&bnd_info.span.raw_span);
+            // // let Some(span) = self.spans.from_air_span(&bnd_info.span.raw_span, Some(self.source_map));
+            // // let span = from_raw_span(&bnd_info.span.raw_span);
 
-            let mut msg = note_bare("Could use explicit quantifier instantiations to reduce SMT burden");
-            msg = msg.secondary_label(
-                &bnd_info.span,
-                "Try instantiation: <todo>",
-                // format!("Try instantiation: ({})", inst.terms.connect(", ")),
-            );
-            diagnostics.report(&msg.to_any());
+            // let mut msg = note_bare("Could use explicit quantifier instantiations to improve SMT stability");
+            // msg = msg.secondary_label(
+            //     &bnd_info.span,
+            //     "Try instantiation: <todo>",
+            //     // format!("Try instantiation: ({})", inst.terms.connect(", ")),
+            // );
+            // println!("instantiations: {:?}", inst.terms);
+            // diagnostics.report(&msg.to_any());
+
+            println!("instantiations: {:?} {:?}", bnd_info.span.as_string, inst.terms);
 
             // let mut multi = MultiSpan::from_span(span);
             // multi.push_span_label(span, "Quantifier introduced to context here".to_string());
@@ -1556,7 +1559,7 @@ impl Verifier {
                     };
                     let desc_prefix = recommends_rerun.then(|| "recommends check: ");
                     
-                    println!("\ncommands {:?} {:?}\n", function.x.name.path, command.commands);
+                    // println!("\ncommands {:?} {:?}\n", function.x.name.path, command.commands);
 
                     let command_invalidity = self.run_commands_queries(
                         reporter,
@@ -1608,8 +1611,9 @@ impl Verifier {
                         prover_choice: command.prover_choice,
                         skip_recommends: command.skip_recommends,
                     });
-                    println!("\ninstantiated commands {:?} {:?}\n", function.x.name.path, instantiated_command.commands);
+                    // println!("\ninstantiated commands {:?} {:?}\n", function.x.name.path, instantiated_command.commands);
 
+                    println!("\nrunning instantiated commands for unsat core");
                     let instantiated_command_invalidity = self.run_commands_queries(
                         reporter,
                         source_map,
@@ -1625,10 +1629,10 @@ impl Verifier {
                         desc_prefix,
                         true, // pop later! (very hacky)
                     );
-                    println!("instantiated commands invalidity: {} {}", instantiated_command_invalidity, command_invalidity);
+                    // println!("instantiated commands invalidity: {} {}", instantiated_command_invalidity, command_invalidity);
 
                     if instantiated_command_invalidity != command_invalidity {
-                        panic!("unexpected QI profiler result");
+                        panic!("instantiated command leads to inconsistent validity results: {} {}", instantiated_command_invalidity, command_invalidity);
                     }
 
                     // Query the prover for unsat core

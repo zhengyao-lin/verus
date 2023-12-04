@@ -1,3 +1,7 @@
+# Notes for compiling this branch
+
+Run `vargo build --release --vstd-no-verify` instead of `vargo build --release`.
+
 [![Quick Start](https://img.shields.io/badge/tutorial-quick%20start-informational)](https://verus-lang.github.io/verus/guide/getting_started.html) [![Library Documentation](https://img.shields.io/badge/docs-vstd-informational)](https://verus-lang.github.io/verus/verusdoc/vstd/) [![project chat](https://img.shields.io/badge/zulip-join_chat-brightgreen.svg)](https://verus-lang.zulipchat.com)
 
 Verus is a tool for verifying the correctness of code written in Rust.

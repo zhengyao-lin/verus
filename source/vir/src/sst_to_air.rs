@@ -1774,6 +1774,8 @@ fn stm_to_stmts(ctx: &Ctx, state: &mut State, stm: &Stm) -> Result<Vec<Stmt>, Vi
             if ctx.funcs_with_ensure_predicate.contains(&func.x.name) {
                 let f_ens = prefix_ensures(&fun_to_air_ident(&func.x.name));
                 // let e_ens = Arc::new(ExprX::Apply(f_ens, Arc::new(ens_args)));
+
+                // ZL NOTE: for QI profiling
                 let mut e_ens = Arc::new(ExprX::Apply(f_ens.clone(), Arc::new(ens_args)));
 
                 // ZL TODO: inline ensure clauses here if profile-all is on
