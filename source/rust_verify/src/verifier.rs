@@ -474,7 +474,7 @@ impl Verifier {
             // println!("instantiations: {:?}", inst.terms);
             // diagnostics.report(&msg.to_any());
 
-            println!("instantiations: {:?} {:?}", bnd_info.span.as_string, inst.terms);
+            println!("instantiations: {:?} {} used: {} {:?}", bnd_info.span.as_string, inst.qid, inst.in_unsat_core.get(), inst.terms);
 
             // let mut multi = MultiSpan::from_span(span);
             // multi.push_span_label(span, "Quantifier introduced to context here".to_string());

@@ -19,7 +19,8 @@ pub struct Instantiation {
     pub index: usize,
     pub qid: String,
     pub terms: air::ast::Exprs,
-    pub rust_expr_strings: Vec<String>, // ZL TODO: find out a better format
+    // pub smt_terms: Vec<Term>,
+    // pub rust_expr_strings: Vec<String>, // ZL TODO: find out a better format
     pub in_unsat_core: Cell<bool>,
 }
 
@@ -124,18 +125,18 @@ impl QuantifierProfiler {
                                                        .expect("failed to unparse term").term))
                             .collect::<Option<Vec<_>>>();
                         
-                        let rust_expr_strings = terms
-                            .iter()
-                            .map(|term_id| self.sexp_to_rust_exp(&model, &model.term_data(term_id).expect("failed to unparse term").term))
-                            .collect::<Option<Vec<_>>>();
+                        // let rust_expr_strings = terms
+                        //     .iter()
+                        //     .map(|term_id| self.sexp_to_rust_exp(&model, &model.term_data(term_id).expect("failed to unparse term").term))
+                        //     .collect::<Option<Vec<_>>>();
 
-                        if let (Some(air_exprs), Some(rust_expr_strings)) = (air_exprs, rust_expr_strings) {
+                        if let Some(air_exprs) = air_exprs {
                             let inst_index = self.instantiations.len();
                             let inst = Arc::new(Instantiation {
                                 index: inst_index,
                                 qid: quant_name.clone(),
                                 terms: Arc::new(air_exprs),
-                                rust_expr_strings: rust_expr_strings,
+                                // rust_expr_strings: rust_expr_strings,
                                 in_unsat_core: Cell::new(false),
                             });
                             self.instantiations.push(inst.clone());
