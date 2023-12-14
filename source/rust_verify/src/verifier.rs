@@ -1559,7 +1559,7 @@ impl Verifier {
                     };
                     let desc_prefix = recommends_rerun.then(|| "recommends check: ");
                     
-                    // println!("\ncommands {:?} {:?}\n", function.x.name.path, command.commands);
+                    println!("\ncommands {:?} {:?}\n", function.x.name.path, command.commands);
 
                     let command_invalidity = self.run_commands_queries(
                         reporter,
@@ -1611,7 +1611,7 @@ impl Verifier {
                         prover_choice: command.prover_choice,
                         skip_recommends: command.skip_recommends,
                     });
-                    // println!("\ninstantiated commands {:?} {:?}\n", function.x.name.path, instantiated_command.commands);
+                    println!("\ninstantiated commands {:?} {:?}\n", function.x.name.path, instantiated_command.commands);
 
                     println!("\nrunning instantiated commands for unsat core");
                     let instantiated_command_invalidity = self.run_commands_queries(

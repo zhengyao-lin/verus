@@ -1781,6 +1781,8 @@ fn stm_to_stmts(ctx: &Ctx, state: &mut State, stm: &Stm) -> Result<Vec<Stmt>, Vi
                 // ZL TODO: inline ensure clauses here if profile-all is on
                 // and change the qids of any quantified formula
 
+                println!("e_ens {:?}", func.x.ensure);
+
                 // Check if there is only one ensure clause and it starts with forall
                 if let [ only_ensure_exp ] = func.x.ensure.as_slice() {
                     if let crate::ast::ExprX::Quant(quant, binders, body) = &only_ensure_exp.x {
