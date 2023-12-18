@@ -709,6 +709,10 @@ fn new_user_qid(ctx: &Ctx, exp: &Exp) -> Qid {
     // let qid = new_user_qid_name(&fun_name, qcount);
     let qid = new_user_qid_name(&fun_name, qcount, ctx.is_qi_inst_target.get());
     ctx.quantifier_count.set(qcount + 1);
+    if let ExpX::Bind(bnd, _) = &exp.x {
+        println!("assigning QID {} to {} used at {}", qid, bnd.span.as_string, exp.span.as_string);
+    }
+
     let trigs = match &exp.x {
         ExpX::Bind(bnd, _) => match &bnd.x {
             BndX::Quant(_, _, trigs) => trigs,
@@ -1781,50 +1785,107 @@ fn stm_to_stmts(ctx: &Ctx, state: &mut State, stm: &Stm) -> Result<Vec<Stmt>, Vi
                 // ZL TODO: inline ensure clauses here if profile-all is on
                 // and change the qids of any quantified formula
 
-                println!("e_ens {:?}", func.x.ensure);
+                // println!("e_ens {:?}", func.x.ensure);
 
                 // Check if there is only one ensure clause and it starts with forall
-                if let [ only_ensure_exp ] = func.x.ensure.as_slice() {
-                    if let crate::ast::ExprX::Quant(quant, binders, body) = &only_ensure_exp.x {
-                        if quant.quant == air::ast::Quant::Forall &&
-                           !func.x.has_return() &&
-                           func.x.params.len() == 1 &&
-                           func.x.params[0].x.name.as_str() == DUMMY_PARAM { // ZL TODO: depends on the specific encoding
-                            // ZL TODO: Current assumptions:
-                            // 1. There is only one ensure clause
-                            // 2. The ensure clause starts with forall
-                            // 3. The function does not have any parameters
+                let mut all_quant_ensures = true;
+                let mut quant_ensures = Vec::new();
 
-                            // ZL TODO: is this right?
-                            let tmp_fun_ssts = crate::update_cell::UpdateCell::new(HashMap::new());
-                            let ensure_params = crate::func_to_air::params_to_pre_post_pars(&func.x.params, false);
+                if !func.x.has_return() && func.x.params.len() == 1 && func.x.params[0].x.name.as_str() == DUMMY_PARAM {
+                    for only_ensure_exp in func.x.ensure.as_slice() {
+                        if let crate::ast::ExprX::Quant(quant, binders, body) = &only_ensure_exp.x {
+                            if quant.quant == air::ast::Quant::Forall { // ZL TODO: depends on the specific encoding
+                                // ZL TODO: Current assumptions:
+                                // 1. There is only one ensure clause
+                                // 2. The ensure clause starts with forall
+                                // 3. The function does not have any parameters
 
-                            // Convert (AGAIN) from VIR to SST
-                            let sst_ensure = crate::ast_to_sst::expr_to_exp_skip_checks(ctx, &Reporter {}, &tmp_fun_ssts, &ensure_params, only_ensure_exp)?;
+                                // ZL TODO: is this right?
+                                let tmp_fun_ssts = crate::update_cell::UpdateCell::new(HashMap::new());
+                                let ensure_params = crate::func_to_air::params_to_pre_post_pars(&func.x.params, false);
 
-                            // TODO: a bit hacky: changing the span of the quantified formula to the span of the current call statement
-                            // so that the profiler can correctly identify the location
-                            let sst_ensure = Arc::new(SpannedTyped { span: stm.span.clone(), typ: sst_ensure.typ.clone(), x: sst_ensure.x.clone() });
+                                // Convert (AGAIN) from VIR to SST
+                                let sst_ensure = crate::ast_to_sst::expr_to_exp_skip_checks(ctx, &Reporter {}, &tmp_fun_ssts, &ensure_params, only_ensure_exp)?;
 
-                            // Convert (AGAIN) from SST to AIR
-                            ctx.is_qi_inst_target.set(true); // ZL TODO: hacky!
-                            let air_ensure = exp_to_expr(ctx, &sst_ensure, expr_ctxt)?;
-                            ctx.is_qi_inst_target.set(false);
+                                // TODO: a bit hacky: changing the span of the quantified formula to the span of the current call statement
+                                // so that the profiler can correctly identify the location
+                                // let sst_ensure = Arc::new(SpannedTyped { span: stm.span.clone(), typ: sst_ensure.typ.clone(), x: sst_ensure.x.clone() });
 
-                            // Encapsulate air_ensure (which could have parameters) as a lambda expression
-                            // let binder = Arc::new(BindX::Lambda(()))
-                            // let air_ensure_lambda = ExprX::Bind(Bind, ())
+                                // Convert (AGAIN) from SST to AIR
+                                ctx.is_qi_inst_target.set(true); // ZL TODO: hacky!
+                                let air_ensure = exp_to_expr(ctx, &sst_ensure, expr_ctxt)?;
+                                ctx.is_qi_inst_target.set(false);
 
-                            // Arc::new(ExprX::Apply(f_ens.clone(), Arc::new(ens_args)));
+                                // Encapsulate air_ensure (which could have parameters) as a lambda expression
+                                // let binder = Arc::new(BindX::Lambda(()))
+                                // let air_ensure_lambda = ExprX::Bind(Bind, ())
 
-                            println!("quantified ensures found {:?}, {:?}, {:?}", f_ens, e_ens, air_ensure.clone());
-                            e_ens = air_ensure;
+                                // Arc::new(ExprX::Apply(f_ens.clone(), Arc::new(ens_args)));
+
+                                // println!("quantified ensures found {:?}, {:?}, {:?}", f_ens, e_ens, air_ensure.clone());
+                                // e_ens = air_ensure;
+                                quant_ensures.push(air_ensure);
+
+                                continue;
+                            }
                         }
+
+                        all_quant_ensures = false;
+                        break;
                     }
                 }
 
+                if all_quant_ensures {
+                    // e_ens = Arc::new(ExprX::Multi(MultiOp::And, Arc::new(quant_ensures)));
+                    for quant_ensure in quant_ensures {
+                        stmts.push(Arc::new(StmtX::Assume(quant_ensure)));
+                    }
+
+                } else {
+                    stmts.push(Arc::new(StmtX::Assume(e_ens)));
+                }
+
+                // if let [ only_ensure_exp ] = func.x.ensure.as_slice() {
+                //     if let crate::ast::ExprX::Quant(quant, binders, body) = &only_ensure_exp.x {
+                //         if quant.quant == air::ast::Quant::Forall &&
+                //            !func.x.has_return() &&
+                //            func.x.params.len() == 1 &&
+                //            func.x.params[0].x.name.as_str() == DUMMY_PARAM { // ZL TODO: depends on the specific encoding
+                //             // ZL TODO: Current assumptions:
+                //             // 1. There is only one ensure clause
+                //             // 2. The ensure clause starts with forall
+                //             // 3. The function does not have any parameters
+
+                //             // ZL TODO: is this right?
+                //             let tmp_fun_ssts = crate::update_cell::UpdateCell::new(HashMap::new());
+                //             let ensure_params = crate::func_to_air::params_to_pre_post_pars(&func.x.params, false);
+
+                //             // Convert (AGAIN) from VIR to SST
+                //             let sst_ensure = crate::ast_to_sst::expr_to_exp_skip_checks(ctx, &Reporter {}, &tmp_fun_ssts, &ensure_params, only_ensure_exp)?;
+
+                //             // TODO: a bit hacky: changing the span of the quantified formula to the span of the current call statement
+                //             // so that the profiler can correctly identify the location
+                //             let sst_ensure = Arc::new(SpannedTyped { span: stm.span.clone(), typ: sst_ensure.typ.clone(), x: sst_ensure.x.clone() });
+
+                //             // Convert (AGAIN) from SST to AIR
+                //             ctx.is_qi_inst_target.set(true); // ZL TODO: hacky!
+                //             let air_ensure = exp_to_expr(ctx, &sst_ensure, expr_ctxt)?;
+                //             ctx.is_qi_inst_target.set(false);
+
+                //             // Encapsulate air_ensure (which could have parameters) as a lambda expression
+                //             // let binder = Arc::new(BindX::Lambda(()))
+                //             // let air_ensure_lambda = ExprX::Bind(Bind, ())
+
+                //             // Arc::new(ExprX::Apply(f_ens.clone(), Arc::new(ens_args)));
+
+                //             println!("quantified ensures found {:?}, {:?}, {:?}", f_ens, e_ens, air_ensure.clone());
+                //             e_ens = air_ensure;
+                //         }
+                //     }
+                // }
+
                 // println!("ensures added! {:?}, {:?}, {:?}", f_ens, e_ens, func.x.ensure);
-                stmts.push(Arc::new(StmtX::Assume(e_ens)));
+                // stmts.push(Arc::new(StmtX::Assume(e_ens)));
             }
             vec![Arc::new(StmtX::Block(Arc::new(stmts)))] // wrap in block for readability
         }
