@@ -486,24 +486,24 @@ pub(crate) fn prelude_nodes(config: PreludeConfig) -> Vec<Node> {
         (declare-fun [Mul] (Int Int) Int)
         (declare-fun [EucDiv] (Int Int) Int)
         (declare-fun [EucMod] (Int Int) Int)
-        (axiom (forall ((x Int) (y Int)) (!
-            (= ([Add] x y) (+ x y))
-            :pattern (([Add] x y))
-            :qid prelude_add
-            :skolemid skolem_prelude_add
-        )))
-        (axiom (forall ((x Int) (y Int)) (!
-            (= ([Sub] x y) (- x y))
-            :pattern (([Sub] x y))
-            :qid prelude_sub
-            :skolemid skolem_prelude_sub
-        )))
-        (axiom (forall ((x Int) (y Int)) (!
-            (= ([Mul] x y) (* x y))
-            :pattern (([Mul] x y))
-            :qid prelude_mul
-            :skolemid skolem_prelude_mul
-        )))
+        // (axiom (forall ((x Int) (y Int)) (!
+        //     (= ([Add] x y) (+ x y))
+        //     :pattern (([Add] x y))
+        //     :qid prelude_add
+        //     :skolemid skolem_prelude_add
+        // )))
+        // (axiom (forall ((x Int) (y Int)) (!
+        //     (= ([Sub] x y) (- x y))
+        //     :pattern (([Sub] x y))
+        //     :qid prelude_sub
+        //     :skolemid skolem_prelude_sub
+        // )))
+        // (axiom (forall ((x Int) (y Int)) (!
+        //     (= ([Mul] x y) (* x y))
+        //     :pattern (([Mul] x y))
+        //     :qid prelude_mul
+        //     :skolemid skolem_prelude_mul
+        // )))
         (axiom (forall ((x Int) (y Int)) (!
             (= ([EucDiv] x y) (div x y))
             :pattern (([EucDiv] x y))

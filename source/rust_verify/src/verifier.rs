@@ -684,7 +684,7 @@ impl Verifier {
 
     fn instantiate_query_helper(
         &self,
-        instantiations: &HashMap<String, Vec<Arc<Instantiation>>>,
+        instantiation_map: &HashMap<String, Vec<Arc<Instantiation>>>,
         new_stmts: &mut Vec<air::ast::Stmt>,
         new_axioms: &mut Vec<air::ast::Decl>,
         stmts: &air::ast::Stmts,
@@ -702,7 +702,8 @@ impl Verifier {
                             triggers,
                             Some(qid),
                         ) = bind.as_ref() {
-                            if let Some(instantiations) = instantiations.get(qid.as_ref()) {
+                            if let Some(instantiations) = instantiation_map.get(qid.as_ref()) {
+                                println!("used quantifier {:?}, qid {:?}", stmt, qid);
                                 for instantiation in instantiations {
                                     assert!(instantiation.terms.len() == binders.len());
 
@@ -726,9 +727,13 @@ impl Verifier {
                                     )));
                                 }
 
-                                continue;
+                                // continue;
                             } // TODO: should we still keep the quantifiers in this case?
+                            else {
+                                println!("unused quantifier {:?}, qid {:?}", stmt, qid);
+                            }
 
+                            continue;
                             // new_axioms.push(Arc::new(DeclX::Axiom(self.instantiate_expr(instantiations, expr))));
                         }
                     }
@@ -736,7 +741,7 @@ impl Verifier {
                     new_stmts.push(stmt.clone());
                 },
 
-                StmtX::Block(stmts) => self.instantiate_query_helper(instantiations, new_stmts, new_axioms, stmts),
+                StmtX::Block(stmts) => self.instantiate_query_helper(instantiation_map, new_stmts, new_axioms, stmts),
 
                 StmtX::Assert(span, expr) => new_stmts.push(stmt.clone()),
 

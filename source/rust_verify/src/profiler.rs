@@ -115,12 +115,13 @@ impl QuantifierProfiler {
                 match &quant_inst.frame {
                     QiFrame::NewMatch { terms, .. } => {
                         let venv = BTreeMap::new();
-                        for term_id in terms {
+                        for term_id in terms.iter().rev() {
                             println!("  inst term: {}", model.id_to_sexp(&venv, term_id).expect("failed to unparse term"));
                         }
 
                         let air_exprs = terms
                             .iter()
+                            .rev()
                             .map(|term_id| self.sexp_to_air_expr(&model, &model.term_data(term_id)
                                                        .expect("failed to unparse term").term))
                             .collect::<Option<Vec<_>>>();
