@@ -456,7 +456,7 @@ impl Verifier {
 
         // Report potential explicit instantiations to reduce SMT burden
         // ZL TODO: refactor this
-        for (index, inst) in profiler.instantiations.iter().take(max).enumerate() {
+        for (index, inst) in profiler.instantiations.iter().enumerate() {
             // Report the quantifier
             let bnd_info = qid_map
                 .get(&inst.qid)
