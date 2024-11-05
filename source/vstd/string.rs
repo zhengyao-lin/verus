@@ -16,6 +16,14 @@ impl View for str {
     spec fn view(&self) -> Seq<char>;
 }
 
+impl DeepView for str {
+    type V = Seq<char>;
+
+    open spec fn deep_view(&self) -> Seq<char> {
+        self.view()
+    }
+}
+
 pub spec fn str_slice_is_ascii(s: &str) -> bool;
 
 #[verifier::external_fn_specification]
@@ -216,6 +224,15 @@ impl View for String {
     type V = Seq<char>;
 
     spec fn view(&self) -> Seq<char>;
+}
+
+#[cfg(feature = "alloc")]
+impl DeepView for String {
+    type V = Seq<char>;
+
+    open spec fn deep_view(&self) -> Seq<char> {
+        self.view()
+    }
 }
 
 #[cfg(feature = "alloc")]
