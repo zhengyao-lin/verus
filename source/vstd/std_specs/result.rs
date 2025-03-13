@@ -11,6 +11,17 @@ use core::result::Result::Ok;
 
 verus! {
 
+impl<T: DeepView, E: DeepView> DeepView for Result<T, E> {
+    type V = Result<T::V, E::V>;
+
+    open spec fn deep_view(&self) -> Result<T::V, E::V> {
+        match self {
+            Result::Ok(t) => Result::Ok(t.deep_view()),
+            Result::Err(e) => Result::Err(e.deep_view()),
+        }
+    }
+}
+
 ////// Add is_variant-style spec functions
 pub trait ResultAdditionalSpecFns<T, E> {
     #[allow(non_snake_case)]
