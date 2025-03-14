@@ -619,6 +619,7 @@ pub fn func_def_to_sst(
             let e_with_req_ens_params = map_expr_rename_vars(e, &req_ens_e_rename)?;
             if ctx.checking_spec_preconditions() {
                 let stms = check_pure_expr(ctx, &mut state, &e_with_req_ens_params)?;
+                let stms = stms.into_iter().map(|s| state.finalize_stm(&ctx, &s)).collect::<Result<Vec<_>, _>>()?;
                 let stms: Vec<_> = stms
                     .iter()
                     .map(|stm| subst_stm(&trait_typ_substs, &HashMap::new(), &stm))
